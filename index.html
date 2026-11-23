@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NoelForge 3D — Holiday Lettering &amp; Ornament STL Studio</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
+  <script src="./vendor/opentype.min.js"></script>
+  <script src="./vendor/clipper.js"></script>
+  <script src="./vendor/jszip.min.js"></script>
+</head>
+<body>
+  <!-- Top Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">🎄</div>
+      <div>
+        <div class="brand-title">
+          NoelForge 3D
+          <span class="brand-badge">Slicer-Ready mm</span>
+        </div>
+        <div class="brand-subtitle">Custom 3D-Printable Christmas Letters, Hoops &amp; Holiday Ornaments</div>
+      </div>
+    </div>
+
+    <!-- One-Click Holiday Presets -->
+    <div class="presets-bar" id="presetsBar">
+      <span class="preset-label">Presets:</span>
+      <button class="preset-btn active" data-preset="script-name">✨ Script Name</button>
+      <button class="preset-btn" data-preset="santa-monogram">🎅 Santa Hat Initial</button>
+      <button class="preset-btn" data-preset="contour-sign">❄️ Contour Plaque</button>
+      <button class="preset-btn" data-preset="recessed-bauble">🔮 Engraved Bauble</button>
+      <button class="preset-btn" data-preset="batch-stocking">🎁 Batch Family Initials</button>
+      <button class="preset-btn" data-preset="reindeer-word">🦌 Antler Nameplate</button>
+    </div>
+
+    <!-- STL Export Actions -->
+    <div class="export-actions">
+      <button class="btn btn-secondary" id="exportAsciiStlBtn" title="Export ASCII STL format">
+        📄 ASCII STL
+      </button>
+      <button class="btn btn-gold" id="exportBatchZipBtn" style="display: none;" title="Download each letter as its own individual STL inside a .ZIP archive">
+        📦 Export Letters (.ZIP)
+      </button>
+      <button class="btn btn-primary" id="exportBinaryStlBtn" title="Export standard binary STL for PrusaSlicer, Bambu Studio, Cura">
+        ⬇ Export Binary STL
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="workspace">
+    <!-- Left Sidebar Controls -->
+    <aside class="sidebar">
+      <nav class="sidebar-tabs">
+        <button class="tab-btn active" data-tab="tab-lettering">
+          <span class="tab-icon">🔤</span>
+          <span>Lettering</span>
+        </button>
+        <button class="tab-btn" data-tab="tab-hoops">
+          <span class="tab-icon">⭕</span>
+          <span>Hoops</span>
+        </button>
+        <button class="tab-btn" data-tab="tab-plaque">
+          <span class="tab-icon">🛡️</span>
+          <span>Plaque/Rim</span>
+        </button>
+        <button class="tab-btn" data-tab="tab-accents">
+          <span class="tab-icon">🎅</span>
+          <span>Accents</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-content">
+        <!-- TAB 1: LETTERING & TYPOGRAPHY -->
+        <div class="tab-pane active" id="tab-lettering">
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">✍️ Holiday Text &amp; Layout Mode</span>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="textInput">
+                <span>Text / Initials</span>
+                <span class="field-value" id="charCountBadge">4 chars</span>
+              </label>
+              <input
+                type="text"
+                id="textInput"
+                value="Noel"
+                maxlength="28"
+                placeholder="Type a name, word, or initials..."
+              />
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Generation Mode</span>
+              <div class="segmented-control" id="layoutModeGroup">
+                <button class="seg-btn active" data-value="connected">Connected Word / Sign</button>
+                <button class="seg-btn" data-value="individual">Individual Monograms</button>
+              </div>
+              <p class="card-hint" id="layoutModeHint">
+                Fuses overlapping script or kerned letters into a single solid 3D ornament.
+              </p>
+            </div>
+          </div>
+
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">🖋️ Font &amp; Dimensions (mm)</span>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="fontSelect">Holiday Font Family</label>
+              <select id="fontSelect">
+                <option value="Lobster-Regular.ttf">Lobster (Thick Connected Script — Best for Names)</option>
+                <option value="CinzelDecorative-Bold.ttf">Cinzel Decorative Bold (Royal Monogram Swash)</option>
+                <option value="MountainsOfChristmas-Bold.ttf">Mountains of Christmas Bold (Festive Display)</option>
+                <option value="BerkshireSwash-Regular.ttf">Berkshire Swash (Storybook Holiday Serif)</option>
+                <option value="Pacifico-Regular.ttf">Pacifico (Rounded Cursive Script)</option>
+                <option value="GreatVibes-Regular.ttf">Great Vibes (Elegant Calligraphy Script)</option>
+                <option value="AbrilFatface-Regular.ttf">Abril Fatface (Classic High-Contrast Serif)</option>
+                <option value="TitanOne-Regular.ttf">Titan One (Chunky Rounded Block Letters)</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label class="file-upload-label" for="customFontInput">
+                <span>📂 Load Custom Font (.TTF / .OTF)</span>
+                <input type="file" id="customFontInput" accept=".ttf,.otf" style="display: none;" />
+              </label>
+            </div>
+
+            <div class="field-group">
+              <div class="field-label">
+                <span>Letter Capital Height</span>
+                <span class="field-value" id="letterHeightVal">60 mm</span>
+              </div>
+              <input type="range" id="letterHeightSlider" min="18" max="180" step="1" value="60" />
+            </div>
+
+            <div class="field-group" id="kerningGroup">
+              <div class="field-label">
+                <span>Letter Spacing / Overlap (Kerning)</span>
+                <span class="field-value" id="kerningVal">-1.2 mm</span>
+              </div>
+              <input type="range" id="kerningSlider" min="-14" max="14" step="0.2" value="-1.2" />
+              <p class="card-hint">Tip: Negative values pull letters closer so adjacent strokes physically fuse together.</p>
+            </div>
+
+            <div class="field-row">
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Z-Thickness</span>
+                  <span class="field-value" id="letterThicknessVal">4.0 mm</span>
+                </div>
+                <input type="range" id="letterThicknessSlider" min="1.2" max="18" step="0.2" value="4.0" />
+              </div>
+
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Top Bevel</span>
+                  <span class="field-value" id="bevelVal">0.3 mm</span>
+                </div>
+                <input type="range" id="bevelSlider" min="0" max="1.4" step="0.1" value="0.3" />
+              </div>
+            </div>
+          </div>
+
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">🔗 Structural Bridges (No Loose Parts)</span>
+            </div>
+
+            <label class="toggle-row">
+              <span>Auto-Bridge Floating Islands (i/j dots &amp; gaps)</span>
+              <input type="checkbox" id="autoBridgeCheck" checked />
+            </label>
+
+            <div class="field-group" id="bridgeWidthGroup">
+              <div class="field-label">
+                <span>Strut Bridge Width</span>
+                <span class="field-value" id="bridgeWidthVal">2.4 mm</span>
+              </div>
+              <input type="range" id="bridgeWidthSlider" min="1.4" max="5.5" step="0.2" value="2.4" />
+            </div>
+
+            <label class="toggle-row">
+              <span>Add Baseline Underline Connector Bar</span>
+              <input type="checkbox" id="baselineBarCheck" />
+            </label>
+
+            <div class="field-row" id="baselineBarSubcontrols" style="display: none;">
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Bar Height</span>
+                  <span class="field-value" id="baselineBarHeightVal">3.8 mm</span>
+                </div>
+                <input type="range" id="baselineBarHeightSlider" min="1.8" max="10" step="0.2" value="3.8" />
+              </div>
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Bar Y-Offset</span>
+                  <span class="field-value" id="baselineBarOffsetVal">0.0 mm</span>
+                </div>
+                <input type="range" id="baselineBarOffsetSlider" min="-10" max="10" step="0.5" value="0" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: HANGING HOOPS (FOR STRING / RIBBON / HOOKS) -->
+        <div class="tab-pane" id="tab-hoops">
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">⭕ Hanging Hoop Placement</span>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="hoopModeSelect">Hoop Arrangement</label>
+              <select id="hoopModeSelect">
+                <option value="smart-peak">Smart Highest Peak (Snaps to Tallest Stroke)</option>
+                <option value="top-center">Top Center (Single Balanced Hoop)</option>
+                <option value="dual-balance">Dual Corner Balance Hoops (Left + Right)</option>
+                <option value="top-left">Top-Left Corner Hoop (Angled Hang)</option>
+                <option value="top-right">Top-Right Corner Hoop (Angled Hang)</option>
+                <option value="none">No Hoop (Free-Standing Shelf Sign)</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Hoop Geometry Style</span>
+              <div class="segmented-control cols-3" id="hoopStyleGroup">
+                <button class="seg-btn" data-value="ring">Round Ring</button>
+                <button class="seg-btn active" data-value="teardrop">Teardrop Lug</button>
+                <button class="seg-btn" data-value="slot">Ribbon Slot</button>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Quick String / Hook Presets</span>
+              <div class="chip-row" id="hoopSizeChips">
+                <button class="chip-btn" data-inner="2.6" data-wall="1.8" data-style="ring">Thread (2.6mm)</button>
+                <button class="chip-btn active" data-inner="4.2" data-wall="2.2" data-style="teardrop">Twine String (4.2mm)</button>
+                <button class="chip-btn" data-inner="5.2" data-wall="2.4" data-style="teardrop">Wire Hook (5.2mm)</button>
+                <button class="chip-btn" data-inner="6.5" data-wall="2.4" data-style="slot">Satin Ribbon Slot</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">📏 Hoop Dimensions &amp; Strength</span>
+              <span class="field-value" id="outerDiameterReadout">Outer Ø 8.6 mm</span>
+            </div>
+
+            <div class="field-group">
+              <div class="field-label">
+                <span>Inner Hole Diameter (String Passage)</span>
+                <span class="field-value" id="hoopInnerVal">4.2 mm</span>
+              </div>
+              <input type="range" id="hoopInnerSlider" min="1.8" max="14.0" step="0.2" value="4.2" />
+            </div>
+
+            <div class="field-group">
+              <div class="field-label">
+                <span>Ring Wall Width (Strength)</span>
+                <span class="field-value" id="hoopWallVal">2.2 mm</span>
+              </div>
+              <input type="range" id="hoopWallSlider" min="1.2" max="5.0" step="0.2" value="2.2" />
+            </div>
+
+            <label class="toggle-row">
+              <span>Match Letter/Base Z-Thickness</span>
+              <input type="checkbox" id="hoopMatchThicknessCheck" checked />
+            </label>
+
+            <div class="field-group" id="hoopCustomThicknessGroup" style="display: none;">
+              <div class="field-label">
+                <span>Custom Hoop Z-Thickness (Anchored at Z=0)</span>
+                <span class="field-value" id="hoopThicknessVal">3.0 mm</span>
+              </div>
+              <input type="range" id="hoopThicknessSlider" min="1.4" max="12.0" step="0.2" value="3.0" />
+            </div>
+          </div>
+
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">🎯 Fine Position Offset &amp; Stem</span>
+            </div>
+
+            <div class="field-row">
+              <div class="field-group">
+                <div class="field-label">
+                  <span>X Offset</span>
+                  <span class="field-value" id="hoopOffsetXVal">0.0 mm</span>
+                </div>
+                <input type="range" id="hoopOffsetXSlider" min="-45" max="45" step="0.5" value="0" />
+              </div>
+
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Y Embed / Height</span>
+                  <span class="field-value" id="hoopOffsetYVal">0.0 mm</span>
+                </div>
+                <input type="range" id="hoopOffsetYSlider" min="-15" max="15" step="0.5" value="0" />
+              </div>
+            </div>
+
+            <div class="field-group" id="hoopSpreadGroup">
+              <div class="field-label">
+                <span>Dual Hoop Horizontal Spread</span>
+                <span class="field-value" id="hoopSpreadVal">65%</span>
+              </div>
+              <input type="range" id="hoopSpreadSlider" min="25" max="92" step="1" value="65" />
+            </div>
+
+            <label class="toggle-row">
+              <span>Auto Reinforcing Stem Bridge into Letter</span>
+              <input type="checkbox" id="hoopAutoStemCheck" checked />
+            </label>
+          </div>
+        </div>
+
+        <!-- TAB 3: BACKING PLAQUE & BORDER RIM -->
+        <div class="tab-pane" id="tab-plaque">
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">🛡️ Backing Plaque / Ornament Base</span>
+            </div>
+
+            <div class="icon-grid" id="plaqueStyleGrid">
+              <button class="icon-choice active" data-style="none">
+                <span class="choice-emoji">🔤</span>
+                <span>None (Free)</span>
+              </button>
+              <button class="icon-choice" data-style="contour">
+                <span class="choice-emoji">☁️</span>
+                <span>Silhouette</span>
+              </button>
+              <button class="icon-choice" data-style="bauble">
+                <span class="choice-emoji">🔮</span>
+                <span>Bauble Circle</span>
+              </button>
+              <button class="icon-choice" data-style="tag">
+                <span class="choice-emoji">🏷️</span>
+                <span>Gift Tag</span>
+              </button>
+              <button class="icon-choice" data-style="tree">
+                <span class="choice-emoji">🎄</span>
+                <span>Pine Tree</span>
+              </button>
+              <button class="icon-choice" data-style="snowflake-plaque">
+                <span class="choice-emoji">❄️</span>
+                <span>Star Medallion</span>
+              </button>
+            </div>
+
+            <div id="plaqueSubcontrols" style="display: none; flex-direction: column; gap: 11px;">
+              <div class="field-group">
+                <span class="field-label">Letter-to-Plaque Relief Mode</span>
+                <div class="segmented-control cols-3" id="plaqueLetterModeGroup">
+                  <button class="seg-btn active" data-value="raised">Raised 3D</button>
+                  <button class="seg-btn" data-value="recessed">Recessed</button>
+                  <button class="seg-btn" data-value="cutout">Cutout</button>
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>Plaque Margin</span>
+                    <span class="field-value" id="plaqueMarginVal">5.0 mm</span>
+                  </div>
+                  <input type="range" id="plaqueMarginSlider" min="1.5" max="18.0" step="0.5" value="5.0" />
+                </div>
+
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>Base Thickness</span>
+                    <span class="field-value" id="plaqueThicknessVal">2.4 mm</span>
+                  </div>
+                  <input type="range" id="plaqueThicknessSlider" min="1.0" max="8.0" step="0.2" value="2.4" />
+                </div>
+              </div>
+
+              <label class="toggle-row">
+                <span>Fill Small Interior Holes in Silhouette Base</span>
+                <input type="checkbox" id="plaqueFillHolesCheck" checked />
+              </label>
+            </div>
+          </div>
+
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">✨ Outlined Halo / Raised Border Rim</span>
+            </div>
+
+            <label class="toggle-row">
+              <span>Enable Raised Border / Outlined Layer</span>
+              <input type="checkbox" id="borderEnabledCheck" />
+            </label>
+
+            <div class="field-row" id="borderSubcontrols" style="display: none;">
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Border Width</span>
+                  <span class="field-value" id="borderWidthVal">2.2 mm</span>
+                </div>
+                <input type="range" id="borderWidthSlider" min="1.0" max="6.0" step="0.2" value="2.2" />
+              </div>
+
+              <div class="field-group">
+                <div class="field-label">
+                  <span>Border Height</span>
+                  <span class="field-value" id="borderHeightVal">2.0 mm</span>
+                </div>
+                <input type="range" id="borderHeightSlider" min="0.8" max="8.0" step="0.2" value="2.0" />
+              </div>
+            </div>
+            <p class="card-hint">
+              Creates a multi-depth stepped outline around the letters or around the outer plaque rim (ideal for filament color swaps!).
+            </p>
+          </div>
+        </div>
+
+        <!-- TAB 4: HOLIDAY ACCENTS -->
+        <div class="tab-pane" id="tab-accents">
+          <div class="control-card">
+            <div class="card-header">
+              <span class="card-title">🎅 3D Holiday Accent Attachment</span>
+            </div>
+
+            <div class="icon-grid" id="accentTypeGrid">
+              <button class="icon-choice active" data-type="none">
+                <span class="choice-emoji">⊘</span>
+                <span>None</span>
+              </button>
+              <button class="icon-choice" data-type="santa-hat">
+                <span class="choice-emoji">🎅</span>
+                <span>Santa Hat</span>
+              </button>
+              <button class="icon-choice" data-type="snowflake">
+                <span class="choice-emoji">❄️</span>
+                <span>Snowflake</span>
+              </button>
+              <button class="icon-choice" data-type="holly">
+                <span class="choice-emoji">🍒</span>
+                <span>Holly &amp; Berries</span>
+              </button>
+              <button class="icon-choice" data-type="star">
+                <span class="choice-emoji">🌟</span>
+                <span>North Star</span>
+              </button>
+              <button class="icon-choice" data-type="antlers">
+                <span class="choice-emoji">🦌</span>
+                <span>Antlers</span>
+              </button>
+            </div>
+
+            <div id="accentSubcontrols" style="display: none; flex-direction: column; gap: 11px;">
+              <div class="field-group">
+                <label class="field-label" for="accentAnchorSelect">Attachment Corner</label>
+                <select id="accentAnchorSelect">
+                  <option value="top-left">Top-Left Letter Peak</option>
+                  <option value="top-right">Top-Right Letter Peak</option>
+                  <option value="top-center">Top-Center Crown</option>
+                  <option value="bottom-right">Bottom-Right Corner</option>
+                </select>
+              </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>Accent Size</span>
+                    <span class="field-value" id="accentScaleVal">100%</span>
+                  </div>
+                  <input type="range" id="accentScaleSlider" min="45" max="175" step="5" value="100" />
+                </div>
+
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>Tilt Angle</span>
+                    <span class="field-value" id="accentRotVal">-12°</span>
+                  </div>
+                  <input type="range" id="accentRotSlider" min="-60" max="60" step="2" value="-12" />
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>X Nudge</span>
+                    <span class="field-value" id="accentOffsetXVal">0.0 mm</span>
+                  </div>
+                  <input type="range" id="accentOffsetXSlider" min="-35" max="35" step="0.5" value="0" />
+                </div>
+
+                <div class="field-group">
+                  <div class="field-label">
+                    <span>Y Nudge</span>
+                    <span class="field-value" id="accentOffsetYVal">-2.0 mm</span>
+                  </div>
+                  <input type="range" id="accentOffsetYSlider" min="-25" max="25" step="0.5" value="-2.0" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center 3D Viewport -->
+    <main class="viewport-container" id="viewportContainer">
+      <canvas id="viewportCanvas"></canvas>
+
+      <!-- Top Floating Stats & Camera Controls -->
+      <div class="viewport-top-bar">
+        <div class="stats-card">
+          <div class="stat-item">
+            <span class="stat-label">Dimensions (X × Y × Z)</span>
+            <span class="stat-value gold" id="statDimensions">120.0 × 65.0 × 4.0 mm</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Hoop Hole Ø</span>
+            <span class="stat-value" id="statHoopHole">4.2 mm (OD 8.6)</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Est. Filament</span>
+            <span class="stat-value" id="statFilament">14.2 g (17.5 cm³)</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Triangles</span>
+            <span class="stat-value" id="statTriangles">18,420</span>
+          </div>
+        </div>
+
+        <div class="viewport-controls-pill">
+          <button class="cam-btn" id="camTopBtn" title="Snap camera directly above build plate">Top View</button>
+          <button class="cam-btn" id="camIsoBtn" title="Reset 3D perspective camera">3D Angle</button>
+          <button class="cam-btn" id="toggleWireframeBtn" title="Inspect STL triangle mesh">Wireframe</button>
+          <button class="cam-btn active" id="toggleGridBtn" title="Toggle 220x220mm 3D Printer Build Plate">220mm Bed</button>
+        </div>
+      </div>
+
+      <!-- Individual Monogram Unit Chip Selector (visible in Individual Monogram Mode) -->
+      <div class="unit-selector-bar" id="unitSelectorBar">
+        <span class="stat-label" style="margin-right: 4px;">Inspect / Export Letter:</span>
+        <div class="chip-row" id="unitChipsContainer"></div>
+      </div>
+
+      <!-- Bottom Printability Status & Filament Color Preview -->
+      <div class="viewport-bottom-bar">
+        <div class="printability-banner" id="printabilityBanner">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">✓ 1 Solid Connected Piece • Flat Z=0 Bottom • Ready to Slice</span>
+          <button class="quick-fix-btn" id="quickFixIslandsBtn" style="display: none;">
+            Auto-Connect Loose Parts
+          </button>
+        </div>
+
+        <div class="filament-palette-bar">
+          <span class="stat-label">Filament Preview:</span>
+          <button
+            class="palette-swatch active"
+            data-palette="classic"
+            title="Classic Holiday (Crimson Base, Gold Letters, Snow White Trim)"
+            style="background: linear-gradient(135deg, #c92a35 50%, #e5b85c 50%);"
+          ></button>
+          <button
+            class="palette-swatch"
+            data-palette="evergreen"
+            title="Evergreen &amp; Gold (Forest Pine Base, Gold Letters, Berry Red Trim)"
+            style="background: linear-gradient(135deg, #1b6b45 50%, #f0c365 50%);"
+          ></button>
+          <button
+            class="palette-swatch"
+            data-palette="frost"
+            title="Winter Frost (Ice Blue Base, Pearl White Letters, Silver Trim)"
+            style="background: linear-gradient(135deg, #3385d6 50%, #f2f7fc 50%);"
+          ></button>
+          <button
+            class="palette-swatch"
+            data-palette="gold"
+            title="Royal Silk Gold (Single Filament Metallic Gold)"
+            style="background: linear-gradient(135deg, #e5b85c 50%, #b5892e 50%);"
+          ></button>
+          <button
+            class="palette-swatch"
+            data-palette="slicer"
+            title="Monochrome Slicer Gray"
+            style="background: linear-gradient(135deg, #8b9bb0 50%, #5e6d80 50%);"
+          ></button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toastMsg">Exported STL!</div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

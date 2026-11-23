@@ -387,6 +387,10 @@ select:focus {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.segmented-control.cols-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .seg-btn {
   background: transparent;
   border: none;

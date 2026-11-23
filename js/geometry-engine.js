@@ -309,6 +309,22 @@ export function offsetClipperPaths(ClipperLib, paths, deltaMm, fillHoles = false
 }
 
 /**
+ * Round both outer convex 2D corners AND inner concave 2D corners of block letters (like the 'E' in the reference photos)
+ * using Clipper morphological opening (-r -> +r) and closing (+r -> -r) with JoinType.jtRound.
+ */
+export function round2DCornersClipperPaths(ClipperLib, paths, radiusMm = 0) {
+  if (!paths || paths.length === 0 || radiusMm <= 0.05) return paths;
+  // 1. Round outer convex corners (-r then +r)
+  const inset = offsetClipperPaths(ClipperLib, paths, -radiusMm, false);
+  if (inset.length === 0) return paths;
+  const outerRounded = offsetClipperPaths(ClipperLib, inset, radiusMm, false);
+  // 2. Round inner concave corners (+r then -r)
+  const outset = offsetClipperPaths(ClipperLib, outerRounded, radiusMm, false);
+  const bothRounded = offsetClipperPaths(ClipperLib, outset, -radiusMm, false);
+  return bothRounded.length > 0 ? bothRounded : outerRounded;
+}
+
+/**
  * Create basic 2D primitives in Clipper coordinates
  */
 export function makeCirclePath(cxMm, cyMm, radiusMm, segments = 48) {
@@ -579,7 +595,9 @@ export function resolveHoopAnchorAtX(paths, targetX, outerRadiusMm = 4.3, custom
 
   // Otherwise targetX sits directly over a top surface (e.g., middle of a block letter bar)
   const anchor = directTop || findTopAnchorPoint(paths, targetX, searchSpan);
-  const defaultHoopY = anchor.y + outerRadiusMm * 0.6;
+  // Position hoop center at anchor.y + outerRadius * 0.76 so the bottom wall embeds ~1mm into the surface
+  // while keeping the inner string hole completely above the flat top surface (no notch cut into the letter bar!)
+  const defaultHoopY = anchor.y + outerRadiusMm * 0.76;
   const hoopY =
     customYMm !== null && isFinite(customYMm)
       ? Math.max(anchor.y + outerRadiusMm * 0.25, customYMm)
@@ -890,15 +908,22 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 44));
     }
 
+    const isCleanRing = style === 'ring' || style === 'eyelet';
+
     // Smooth tapered capsule stem(s) anchored deep inside the inward-offset letter core
+    // For clean 'ring' or 'eyelet', only add a bridge strut if the hoop is spanning a gap or lifted off the surface
     if (hoopConfig.autoStemBridge !== false && targets.length > 0) {
       const topNeckR =
         style === 'teardrop'
           ? outerRadius * (targets.length === 1 ? 0.86 : 0.62)
-          : Math.max(wallWidth * 0.9, outerRadius * 0.56);
+          : Math.max(wallWidth * 0.72, outerRadius * 0.42);
 
       for (const st of targets) {
-        // Find nearest interior core point slightly below the surface contact point (st.x, st.y)
+        const distToSurface = Math.hypot(st.x - ax, st.y - ay);
+        if (isCleanRing && targets.length === 1 && distToSurface <= outerRadius * 0.85) {
+          // Ring already embeds directly into the surface — no wide neck skirt needed
+          continue;
+        }
         const corePt = findNearestContourPoint(innerCorePaths, st.x, st.y - 1.5);
         const capsule = makeTaperedCapsulePaths(
           ClipperLib,
@@ -916,33 +941,33 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
 
   const unionedHoopOuter = unionClipperPaths(ClipperLib, allOuterPaths);
 
-  // Naturally incorporate hoop into targetPaths with a 2D Concave Round Fillet (Morphological Closing)
-  // at the neck junction so the hoop blends organically into the letter contour!
-  const filletR = Math.min(1.6, wallWidth * 0.72);
-  const rawCombined = unionClipperPaths(ClipperLib, targetPaths, unionedHoopOuter);
-  const expanded = offsetClipperPaths(ClipperLib, rawCombined, filletR, false);
-  const closedFilleted = offsetClipperPaths(ClipperLib, expanded, -filletR, false);
+  let hoopWithFillet = unionedHoopOuter;
+  // Apply wide concave neck fillet only for 'teardrop' or 'slot' styles;
+  // keep 'ring' and 'eyelet' as a crisp circular loop emerging directly from the flat surface!
+  if (style === 'teardrop' || style === 'slot') {
+    const filletR = Math.min(1.6, wallWidth * 0.72);
+    const rawCombined = unionClipperPaths(ClipperLib, targetPaths, unionedHoopOuter);
+    const expanded = offsetClipperPaths(ClipperLib, rawCombined, filletR, false);
+    const closedFilleted = offsetClipperPaths(ClipperLib, expanded, -filletR, false);
 
-  // Intersect the fillet web with a local window around the hoop(s) so distant letter corners stay untouched
-  const hoopNeckWindows = rawTargets.map((t) =>
-    makeRoundedRectPath(t.x, t.y - outerRadius * 0.45, outerRadius * 3.8, outerRadius * 3.4, 2)
-  );
-  const unionedWindows = unionClipperPaths(ClipperLib, hoopNeckWindows);
+    const hoopNeckWindows = rawTargets.map((t) =>
+      makeRoundedRectPath(t.x, t.y - outerRadius * 0.45, outerRadius * 3.8, outerRadius * 3.4, 2)
+    );
+    const unionedWindows = unionClipperPaths(ClipperLib, hoopNeckWindows);
 
-  // Extract only the added concave fillet webbing inside the neck windows
-  const cpr = new ClipperLib.Clipper();
-  cpr.AddPaths(closedFilleted, ClipperLib.PolyType.ptSubject, true);
-  cpr.AddPaths(unionedWindows, ClipperLib.PolyType.ptClip, true);
-  const localFilleted = new ClipperLib.Paths();
-  cpr.Execute(
-    ClipperLib.ClipType.ctIntersection,
-    localFilleted,
-    ClipperLib.PolyFillType.pftNonZero,
-    ClipperLib.PolyFillType.pftNonZero
-  );
+    const cpr = new ClipperLib.Clipper();
+    cpr.AddPaths(closedFilleted, ClipperLib.PolyType.ptSubject, true);
+    cpr.AddPaths(unionedWindows, ClipperLib.PolyType.ptClip, true);
+    const localFilleted = new ClipperLib.Paths();
+    cpr.Execute(
+      ClipperLib.ClipType.ctIntersection,
+      localFilleted,
+      ClipperLib.PolyFillType.pftNonZero,
+      ClipperLib.PolyFillType.pftNonZero
+    );
 
-  // Union the smooth local fillet webbing with the hoop outer shape
-  const hoopWithFillet = unionClipperPaths(ClipperLib, unionedHoopOuter, localFilleted);
+    hoopWithFillet = unionClipperPaths(ClipperLib, unionedHoopOuter, localFilleted);
+  }
 
   // Trim the bottom of the hoop where it meets targetPaths so its visible seam follows the
   // EXACT curved contour of the letter (overlapping by 0.25mm inside for a watertight 3D print)
@@ -1402,21 +1427,75 @@ export function extrudeClipperPaths(
   if (shapes.length === 0 || depthMm <= 0.05) return null;
 
   const useBevel = bevelMm > 0.02;
+  const safeBevel = useBevel ? Math.min(bevelMm, depthMm * 0.35) : 0;
   const geom = new THREE.ExtrudeGeometry(shapes, {
-    depth: Math.max(0.1, depthMm - (useBevel ? bevelMm : 0)),
+    depth: Math.max(0.1, depthMm - (useBevel ? safeBevel * 2 : 0)),
     bevelEnabled: useBevel,
-    bevelThickness: useBevel ? bevelMm : 0,
-    bevelSize: useBevel ? bevelMm * 0.85 : 0,
-    bevelOffset: useBevel ? -bevelMm * 0.4 : 0,
-    bevelSegments: useBevel ? 3 : 1,
-    curveSegments: 12,
+    bevelThickness: safeBevel,
+    bevelSize: safeBevel * 0.85,
+    bevelOffset: -safeBevel * 0.4,
+    bevelSegments: useBevel ? 4 : 1,
+    curveSegments: 16,
   });
 
-  if (zStartMm !== 0) {
-    geom.translate(0, 0, zStartMm);
+  const zShift = zStartMm + (useBevel ? safeBevel : 0);
+  if (zShift !== 0) {
+    geom.translate(0, 0, zShift);
   }
   geom.computeVertexNormals();
   return geom;
+}
+
+/**
+ * Build a 3D Rounded Torus Eyelet Geometry (like a physical round wire screw-eye / loop centered in the middle of the top edge)
+ */
+export function build3DTorusEyeletGeometry(anchors, hoopConfig, zCenterMm) {
+  if (!anchors || anchors.length === 0) return null;
+  const innerRadius = Math.max(0.8, (hoopConfig.innerDiameterMm || 4.5) / 2);
+  const tubeRadius = Math.max(0.6, (hoopConfig.wallThicknessMm || 1.8) / 2);
+  const majorRadius = innerRadius + tubeRadius;
+
+  const geoms = [];
+  for (const t of anchors) {
+    // 3D Torus Loop in XY plane centered at (t.x, t.y, zCenterMm)
+    const torus = new THREE.TorusGeometry(majorRadius, tubeRadius, 24, 56);
+    torus.translate(t.x, t.y, zCenterMm);
+    geoms.push(torus);
+
+    // Cylindrical stem shank(s) anchoring the bottom of the torus ring into the middle of the top surface
+    const targets =
+      t.stemTargets && t.stemTargets.length > 0
+        ? t.stemTargets
+        : t.stemTarget
+        ? [t.stemTarget]
+        : [];
+    for (const st of targets) {
+      const bx = st.x;
+      const by = st.y - 2.0; // penetrate 2.0mm inside the top surface
+      const dx = bx - t.x;
+      const dy = by - t.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 0.2) {
+        const cyl = new THREE.CylinderGeometry(
+          tubeRadius * 0.95,
+          tubeRadius * 0.95,
+          len,
+          20
+        );
+        const midX = (t.x + bx) / 2;
+        const midY = (t.y + by) / 2;
+        const angle = Math.atan2(dy, dx) - Math.PI / 2;
+        cyl.rotateZ(angle);
+        cyl.translate(midX, midY, zCenterMm);
+        geoms.push(cyl);
+      }
+    }
+  }
+
+  if (geoms.length === 0) return null;
+  const merged = BufferGeometryUtils.mergeGeometries(geoms, false);
+  merged.computeVertexNormals();
+  return merged;
 }
 
 /**
@@ -1444,6 +1523,16 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
   // Center text at origin (0, 0)
   const rawBounds = getClipperBoundsMm(letterPaths);
   letterPaths = translateClipperPaths(letterPaths, -rawBounds.centerX, -rawBounds.centerY);
+
+  // Optional 2D Corner Rounding (rounds both outer convex and inner concave corners, e.g. on block letters like 'E')
+  if (config.cornerRadiusMm && config.cornerRadiusMm > 0.05) {
+    letterPaths = round2DCornersClipperPaths(
+      ClipperLib,
+      letterPaths,
+      config.cornerRadiusMm
+    );
+  }
+
   const centeredBounds = getClipperBoundsMm(letterPaths);
 
   // 2. Optional Baseline Connector / Runner Bar (fuses multi-letter words along the bottom)
@@ -1513,6 +1602,9 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
   }
 
   // If hoop has a hole, ensure the hole cuts through any overlapping plaque or border
+  // (Only cut through letterPaths if the hoop spans the full thickness rather than a centered Mid-Z eyelet)
+  const hoopZPlacement =
+    config.hoop?.zPlacement || (config.hoop?.matchThickness ? 'full' : 'center');
   if (hoopResult.holePaths && hoopResult.holePaths.length > 0) {
     if (plaquePaths.length > 0) {
       plaquePaths = differenceClipperPaths(ClipperLib, plaquePaths, hoopResult.holePaths);
@@ -1520,7 +1612,11 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
     if (borderPaths.length > 0) {
       borderPaths = differenceClipperPaths(ClipperLib, borderPaths, hoopResult.holePaths);
     }
-    if (letterPaths.length > 0) {
+    if (
+      letterPaths.length > 0 &&
+      hoopZPlacement === 'full' &&
+      config.hoop?.style !== 'eyelet'
+    ) {
       letterPaths = differenceClipperPaths(ClipperLib, letterPaths, hoopResult.holePaths);
     }
   }
@@ -1632,27 +1728,58 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
       });
     }
 
-    // Hanging Hoop (sits flat at Z=0 on print bed, with matching top bevel when matching letter thickness)
-    if (hoopResult.hoopPaths.length > 0) {
-      const hoopZ = config.hoop.matchThickness
-        ? letterThicknessMm
-        : Math.min(letterThicknessMm, config.hoop.thicknessMm || letterThicknessMm);
-      const hoopBevel = config.hoop.matchThickness ? bevelMm : 0;
-      const hoopGeom = extrudeClipperPaths(
-        ClipperLib,
-        hoopResult.hoopPaths,
-        hoopZ,
-        0,
-        hoopBevel
-      );
-      if (hoopGeom) {
-        layers.push({
-          name: 'Hanging Hoop',
-          role: 'hoop',
-          geometry: hoopGeom,
-          zMin: 0,
-          zMax: hoopZ,
-        });
+    // Hanging Hoop (supports 3D Rounded Torus Eyelet or Flat Extruded Ring, centered in surface thickness or at Z=0)
+    if (config.hoop && config.hoop.mode !== 'none') {
+      const zPlacement =
+        config.hoop.zPlacement ||
+        (config.hoop.matchThickness ? 'full' : 'center');
+
+      if (config.hoop.style === 'eyelet') {
+        const tubeR = Math.max(0.6, (config.hoop.wallThicknessMm || 1.8) / 2);
+        const zCenter =
+          zPlacement === 'bed'
+            ? tubeR
+            : letterThicknessMm / 2;
+        const eyeletGeom = build3DTorusEyeletGeometry(
+          hoopResult.anchors,
+          config.hoop,
+          zCenter
+        );
+        if (eyeletGeom) {
+          layers.push({
+            name: 'Hanging Eyelet Hoop',
+            role: 'hoop',
+            geometry: eyeletGeom,
+            zMin: Math.max(0, zCenter - tubeR),
+            zMax: zCenter + tubeR,
+          });
+        }
+      } else if (hoopResult.hoopPaths.length > 0) {
+        const hoopZ =
+          zPlacement === 'full'
+            ? letterThicknessMm
+            : Math.min(letterThicknessMm, config.hoop.thicknessMm || 2.4);
+        const zStart =
+          zPlacement === 'center'
+            ? Math.max(0, (letterThicknessMm - hoopZ) / 2)
+            : 0;
+        const hoopBevel = zPlacement === 'full' ? bevelMm : Math.min(bevelMm, hoopZ * 0.25);
+        const hoopGeom = extrudeClipperPaths(
+          ClipperLib,
+          hoopResult.hoopPaths,
+          hoopZ,
+          zStart,
+          hoopBevel
+        );
+        if (hoopGeom) {
+          layers.push({
+            name: 'Hanging Hoop',
+            role: 'hoop',
+            geometry: hoopGeom,
+            zMin: zStart,
+            zMax: zStart + hoopZ,
+          });
+        }
       }
     }
   }

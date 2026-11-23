@@ -13,6 +13,14 @@ const JSZip = window.JSZip;
 
 // Filament color palettes for multi-layer 3D print preview
 const PALETTES = {
+  chalk: {
+    base: 0xf0f2f5,       // Matte Chalk White
+    hoop: 0xd8dee6,       // Brushed Silver / White Eyelet
+    letter: 0xf4f5f7,     // Matte Chalk White Block Letter
+    border: 0xe6e9ef,
+    accent: 0xd93843,
+    'accent-trim': 0xffffff,
+  },
   classic: {
     base: 0xb82530,       // Festive Crimson Red
     hoop: 0xd4323e,       // Crimson Hoop
@@ -57,6 +65,53 @@ const PALETTES = {
 
 // Curated One-Click Holiday Presets
 const PRESETS = {
+  'reference-block': {
+    text: 'E',
+    layoutMode: 'connected',
+    fontFile: 'ArchivoBlack-Regular.ttf',
+    letterHeightMm: 78,
+    kerningMm: 0,
+    letterThicknessMm: 12.0,
+    bevelMm: 0.5,
+    cornerRadiusMm: 1.2,
+    autoBridgeIslands: true,
+    bridgeWidthMm: 2.4,
+    baselineBar: { enabled: false, heightMm: 3.8, offsetYMm: 0 },
+    hoop: {
+      mode: 'top-center',
+      style: 'eyelet',
+      zPlacement: 'center',
+      innerDiameterMm: 4.5,
+      wallThicknessMm: 1.5,
+      matchThickness: false,
+      thicknessMm: 2.2,
+      offsetXMm: 0,
+      offsetYMm: 0,
+      spreadPercent: 65,
+      autoStemBridge: true,
+    },
+    plaque: {
+      style: 'none',
+      letterMode: 'raised',
+      marginMm: 5.0,
+      baseThicknessMm: 2.4,
+      fillInteriorHoles: true,
+    },
+    border: {
+      enabled: false,
+      widthMm: 2.2,
+      heightMm: 1.8,
+    },
+    accent: {
+      type: 'none',
+      anchor: 'top-left',
+      scalePercent: 95,
+      rotationDeg: -10,
+      offsetXMm: 0,
+      offsetYMm: 0,
+      reliefHeightMm: 0.8,
+    },
+  },
   'block-letters': {
     text: 'NOEL',
     layoutMode: 'connected',
@@ -376,10 +431,10 @@ const PRESETS = {
 
 // Application State
 const state = {
-  config: structuredClone(PRESETS['script-name']),
+  config: structuredClone(PRESETS['reference-block']),
   fontCache: new Map(),
   activeFont: null,
-  currentPalette: 'classic',
+  currentPalette: 'chalk',
   wireframe: false,
   showGrid: true,
   selectedUnitIndex: -1, // -1 = All Plate, 0..N = specific individual monogram letter
@@ -1352,6 +1407,7 @@ function syncUIFromConfig() {
   setSlider('kerningSlider', 'kerningVal', cfg.kerningMm, ' mm');
   setSlider('letterThicknessSlider', 'letterThicknessVal', cfg.letterThicknessMm, ' mm');
   setSlider('bevelSlider', 'bevelVal', cfg.bevelMm, ' mm');
+  setSlider('cornerRadiusSlider', 'cornerRadiusVal', cfg.cornerRadiusMm || 0, ' mm');
 
   // Bridges
   document.getElementById('autoBridgeCheck').checked = !!cfg.autoBridgeIslands;
@@ -1383,15 +1439,19 @@ function syncUIFromConfig() {
   document.querySelectorAll('#hoopStyleGroup .seg-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.value === cfg.hoop.style);
   });
+  const activeZPlace =
+    cfg.hoop.zPlacement || (cfg.hoop.matchThickness ? 'full' : 'center');
+  document.querySelectorAll('#hoopZPlacementGroup .seg-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.value === activeZPlace);
+  });
   setSlider('hoopInnerSlider', 'hoopInnerVal', cfg.hoop.innerDiameterMm, ' mm');
   setSlider('hoopWallSlider', 'hoopWallVal', cfg.hoop.wallThicknessMm, ' mm');
   const od = cfg.hoop.innerDiameterMm + cfg.hoop.wallThicknessMm * 2;
   document.getElementById('outerDiameterReadout').textContent = `Outer Ø ${od.toFixed(1)} mm`;
 
-  document.getElementById('hoopMatchThicknessCheck').checked = !!cfg.hoop.matchThickness;
-  document.getElementById('hoopCustomThicknessGroup').style.display = cfg.hoop.matchThickness
-    ? 'none'
-    : 'flex';
+  document.getElementById('hoopMatchThicknessCheck').checked = activeZPlace === 'full';
+  document.getElementById('hoopCustomThicknessGroup').style.display =
+    activeZPlace === 'full' || cfg.hoop.style === 'eyelet' ? 'none' : 'flex';
   setSlider('hoopThicknessSlider', 'hoopThicknessVal', cfg.hoop.thicknessMm || 3.0, ' mm');
   setSlider('hoopOffsetXSlider', 'hoopOffsetXVal', cfg.hoop.offsetXMm, ' mm');
   setSlider('hoopOffsetYSlider', 'hoopOffsetYVal', cfg.hoop.offsetYMm, ' mm');
@@ -1469,6 +1529,10 @@ function bindUIEvents() {
 
       state.config = structuredClone(preset);
       state.selectedUnitIndex = -1;
+      state.currentPalette = presetKey === 'reference-block' ? 'chalk' : 'classic';
+      document.querySelectorAll('.palette-swatch').forEach((s) => {
+        s.classList.toggle('active', s.dataset.palette === state.currentPalette);
+      });
       syncUIFromConfig();
       state.activeFont = await loadFontByName(state.config.fontFile);
       rebuildSceneGeometry();
@@ -1552,6 +1616,7 @@ function bindUIEvents() {
   bindRange('kerningSlider', 'kerningVal', ' mm', (v) => (state.config.kerningMm = v), 1);
   bindRange('letterThicknessSlider', 'letterThicknessVal', ' mm', (v) => (state.config.letterThicknessMm = v), 1);
   bindRange('bevelSlider', 'bevelVal', ' mm', (v) => (state.config.bevelMm = v), 1);
+  bindRange('cornerRadiusSlider', 'cornerRadiusVal', ' mm', (v) => (state.config.cornerRadiusMm = v), 1);
   bindRange('bridgeWidthSlider', 'bridgeWidthVal', ' mm', (v) => (state.config.bridgeWidthMm = v), 1);
 
   document.getElementById('autoBridgeCheck').addEventListener('change', (e) => {
@@ -1656,6 +1721,15 @@ function bindUIEvents() {
     });
   });
 
+  document.querySelectorAll('#hoopZPlacementGroup .seg-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.config.hoop.zPlacement = btn.dataset.value;
+      state.config.hoop.matchThickness = btn.dataset.value === 'full';
+      syncUIFromConfig();
+      rebuildSceneGeometry();
+    });
+  });
+
   document.querySelectorAll('#hoopSizeChips .chip-btn').forEach((chip) => {
     chip.addEventListener('click', () => {
       document
@@ -1685,6 +1759,7 @@ function bindUIEvents() {
 
   document.getElementById('hoopMatchThicknessCheck').addEventListener('change', (e) => {
     state.config.hoop.matchThickness = e.target.checked;
+    state.config.hoop.zPlacement = e.target.checked ? 'full' : 'center';
     syncUIFromConfig();
     rebuildSceneGeometry();
   });

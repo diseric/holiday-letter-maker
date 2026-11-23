@@ -33,13 +33,13 @@
     <!-- One-Click Holiday Presets -->
     <div class="presets-bar" id="presetsBar">
       <span class="preset-label">Presets:</span>
-      <button class="preset-btn" data-preset="block-letters">🧱 Bold Block Letters</button>
-      <button class="preset-btn active" data-preset="script-name">✨ Script Name</button>
+      <button class="preset-btn active" data-preset="reference-block">⬜ White Block Letter</button>
+      <button class="preset-btn" data-preset="block-letters">🧱 Bold Block Sign</button>
+      <button class="preset-btn" data-preset="script-name">✨ Script Name</button>
       <button class="preset-btn" data-preset="santa-monogram">🎅 Santa Hat Initial</button>
       <button class="preset-btn" data-preset="contour-sign">❄️ Contour Plaque</button>
       <button class="preset-btn" data-preset="recessed-bauble">🔮 Engraved Bauble</button>
       <button class="preset-btn" data-preset="batch-stocking">🎁 Batch Initials</button>
-      <button class="preset-btn" data-preset="reindeer-word">🦌 Antler Sign</button>
     </div>
 
     <!-- STL Export Actions -->
@@ -195,18 +195,26 @@
               <div class="field-group">
                 <div class="field-label">
                   <span>Z-Thickness</span>
-                  <span class="field-value" id="letterThicknessVal">4.0 mm</span>
+                  <span class="field-value" id="letterThicknessVal">11.0 mm</span>
                 </div>
-                <input type="range" id="letterThicknessSlider" min="1.2" max="18" step="0.2" value="4.0" />
+                <input type="range" id="letterThicknessSlider" min="1.2" max="24" step="0.2" value="11.0" />
               </div>
 
               <div class="field-group">
                 <div class="field-label">
-                  <span>Top Bevel</span>
-                  <span class="field-value" id="bevelVal">0.3 mm</span>
+                  <span>3D Edge Bevel</span>
+                  <span class="field-value" id="bevelVal">0.5 mm</span>
                 </div>
-                <input type="range" id="bevelSlider" min="0" max="1.4" step="0.1" value="0.3" />
+                <input type="range" id="bevelSlider" min="0" max="1.6" step="0.1" value="0.5" />
               </div>
+            </div>
+
+            <div class="field-group">
+              <div class="field-label">
+                <span>2D Corner Rounding (Inner &amp; Outer Block Corners)</span>
+                <span class="field-value" id="cornerRadiusVal">1.2 mm</span>
+              </div>
+              <input type="range" id="cornerRadiusSlider" min="0" max="3.5" step="0.1" value="1.2" />
             </div>
           </div>
 
@@ -289,19 +297,29 @@
 
             <div class="field-group">
               <span class="field-label">Hoop Geometry Style</span>
-              <div class="segmented-control cols-3" id="hoopStyleGroup">
-                <button class="seg-btn" data-value="ring">Round Ring</button>
-                <button class="seg-btn active" data-value="teardrop">Teardrop Lug</button>
+              <div class="segmented-control cols-4" id="hoopStyleGroup">
+                <button class="seg-btn active" data-value="eyelet">3D Eyelet</button>
+                <button class="seg-btn" data-value="ring">Flat Ring</button>
+                <button class="seg-btn" data-value="teardrop">Teardrop</button>
                 <button class="seg-btn" data-value="slot">Ribbon Slot</button>
+              </div>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Hoop Z-Depth Placement on Surface</span>
+              <div class="segmented-control cols-3" id="hoopZPlacementGroup">
+                <button class="seg-btn active" data-value="center" title="Centers hoop in the middle of the top surface thickness (front-to-back)">Middle of Surface</button>
+                <button class="seg-btn" data-value="bed" title="Places hoop flat on the build plate (Z=0)">Flat on Bed (Z=0)</button>
+                <button class="seg-btn" data-value="full" title="Extrudes hoop across the full Z-thickness of the letter">Full Thickness</button>
               </div>
             </div>
 
             <div class="field-group">
               <span class="field-label">Quick String / Hook Presets</span>
               <div class="chip-row" id="hoopSizeChips">
+                <button class="chip-btn active" data-inner="4.5" data-wall="1.5" data-style="eyelet">Metal Eyelet (4.5mm)</button>
                 <button class="chip-btn" data-inner="2.6" data-wall="1.8" data-style="ring">Thread (2.6mm)</button>
-                <button class="chip-btn active" data-inner="4.2" data-wall="2.2" data-style="teardrop">Twine String (4.2mm)</button>
-                <button class="chip-btn" data-inner="5.2" data-wall="2.4" data-style="teardrop">Wire Hook (5.2mm)</button>
+                <button class="chip-btn" data-inner="4.2" data-wall="2.0" data-style="ring">Twine Ring (4.2mm)</button>
                 <button class="chip-btn" data-inner="6.5" data-wall="2.4" data-style="slot">Satin Ribbon Slot</button>
               </div>
             </div>
@@ -634,6 +652,12 @@
           <span class="stat-label">Filament Preview:</span>
           <button
             class="palette-swatch active"
+            data-palette="chalk"
+            title="Matte Chalk White &amp; Silver Eyelet (Matches Reference Block Letter)"
+            style="background: linear-gradient(135deg, #f4f5f7 50%, #cfd6df 50%);"
+          ></button>
+          <button
+            class="palette-swatch"
             data-palette="classic"
             title="Classic Holiday (Crimson Base, Gold Letters, Snow White Trim)"
             style="background: linear-gradient(135deg, #c92a35 50%, #e5b85c 50%);"

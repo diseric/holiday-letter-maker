@@ -669,6 +669,19 @@ function rebuildSceneGeometry() {
   updatePrintabilityDiagnostics(project, unitsToRender);
 
   // Render interactive 3D Hoop Drag Handles & sync custom hoop list
+  if (
+    state.config.hoop.mode === 'custom' &&
+    unitsToRender[0] &&
+    unitsToRender[0].hoopAnchors &&
+    unitsToRender[0].hoopAnchors.length ===
+      (state.config.hoop.customPoints || []).length
+  ) {
+    // Keep customPoints synchronized with the outer-edge snapped anchor positions
+    state.config.hoop.customPoints = unitsToRender[0].hoopAnchors.map((a) => ({
+      x: Number(a.x.toFixed(1)),
+      y: Number(a.y.toFixed(1)),
+    }));
+  }
   renderHoopGizmos(unitsToRender, depthMm);
   renderCustomHoopsList();
 }
@@ -732,13 +745,13 @@ function renderHoopGizmos(unitsToRender, maxZ) {
       const isSelected =
         state.config.hoop.mode === 'custom' && idx === state.activeCustomHoopIndex;
 
-      // Glowing interactive ring gizmo
-      const ringGeom = new THREE.RingGeometry(innerR * 0.75, outerR * 1.08, 32);
+      // Glowing interactive ring gizmo + generous hit disc so grabbing any hoop in 3D is effortless
+      const ringGeom = new THREE.RingGeometry(innerR * 0.65, outerR * 1.18, 32);
       const ringMat = new THREE.MeshBasicMaterial({
         color: isSelected || state.pickHoopActive ? 0xffd25a : 0xe5b85c,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: isSelected || state.pickHoopActive ? 0.55 : 0.22,
+        opacity: isSelected || state.pickHoopActive ? 0.7 : 0.32,
         depthTest: false,
       });
       const ringMesh = new THREE.Mesh(ringGeom, ringMat);
@@ -749,6 +762,26 @@ function renderHoopGizmos(unitsToRender, maxZ) {
         unitOffset: { dx, dy },
       };
       hoopGizmoGroup.add(ringMesh);
+
+      // Invisible larger 3D hit cylinder spanning full Z height so clicking any part of a hoop grabs it
+      const hitGeom = new THREE.CylinderGeometry(
+        outerR * 1.45,
+        outerR * 1.45,
+        handleZ + 2,
+        20
+      );
+      hitGeom.rotateX(Math.PI / 2);
+      const hitMat = new THREE.MeshBasicMaterial({
+        visible: false,
+      });
+      const hitMesh = new THREE.Mesh(hitGeom, hitMat);
+      hitMesh.position.set(anchor.x + dx, anchor.y + dy, handleZ / 2);
+      hitMesh.userData = {
+        isHoopHandle: true,
+        hoopIndex: idx,
+        unitOffset: { dx, dy },
+      };
+      hoopGizmoGroup.add(hitMesh);
     });
   });
 }
@@ -781,47 +814,127 @@ function updateGhostPreviewHoop(worldX, worldY) {
 }
 
 /**
- * Raycast pointer event to the Z=0 build plate plane (returns { x, y } in mm)
+ * Raycast pointer event against the 3D ornament meshes first (to avoid perspective parallax),
+ * falling back to the Z=0 build plate plane (returns { x, y } in mm).
  */
 function getPointerBuildPlateMm(event, canvas) {
   const rect = canvas.getBoundingClientRect();
   pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
+
+  // First check direct intersection with the 3D ornament meshes
+  if (ornamentGroup && ornamentGroup.children.length > 0) {
+    const meshHits = raycaster.intersectObjects(ornamentGroup.children, false);
+    if (meshHits.length > 0) {
+      return { x: meshHits[0].point.x, y: meshHits[0].point.y };
+    }
+  }
+
   const hitPt = new THREE.Vector3();
   const hit = raycaster.ray.intersectPlane(buildPlatePlane, hitPt);
   return hit ? { x: hitPt.x, y: hitPt.y } : null;
 }
 
 /**
+ * Helper to resolve unit offset (dx, dy) for a world point (pt.x, pt.y)
+ */
+function resolveUnitOffsetForWorldPoint(pt) {
+  let dx = 0,
+    dy = 0;
+  if (
+    state.lastProject &&
+    state.lastProject.mode === 'individual' &&
+    state.selectedUnitIndex === -1 &&
+    state.lastProject.units.length > 0
+  ) {
+    let bestDist = Infinity;
+    for (const u of state.lastProject.units) {
+      const udx = u.plateOffset?.dx || 0;
+      const udy = u.plateOffset?.dy || 0;
+      const d = Math.hypot(pt.x - udx, pt.y - udy);
+      if (d < bestDist) {
+        bestDist = d;
+        dx = udx;
+        dy = udy;
+      }
+    }
+  }
+  return { dx, dy };
+}
+
+/**
  * Setup interactive click-to-place & direct drag-and-drop for hanging hoops on the 3D canvas
  */
 function setupHoopPointerInteractions(canvas) {
-  let downPos = null;
+  // Use capture phase so we intercept pointerdown before OrbitControls when picking or grabbing a hoop
+  canvas.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (e.button !== 0) return;
 
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
-    downPos = { x: e.clientX, y: e.clientY };
+      const rect = canvas.getBoundingClientRect();
+      pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNDC, camera);
 
-    const rect = canvas.getBoundingClientRect();
-    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(pointerNDC, camera);
+      // 1. Check if user clicked on an existing 3D hoop handle
+      const hits = raycaster.intersectObjects(hoopGizmoGroup.children, false);
+      if (hits.length > 0) {
+        const handle = hits[0].object;
+        ensureCustomHoopPointsInitialized();
+        state.draggingHoopIndex = handle.userData.hoopIndex ?? 0;
+        state.activeCustomHoopIndex = state.draggingHoopIndex;
+        state.draggingUnitOffset = handle.userData.unitOffset || { dx: 0, dy: 0 };
+        controls.enabled = false;
+        canvas.style.cursor = 'grabbing';
+        syncUIFromConfig();
+        renderCustomHoopsList(true);
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
 
-    // Check if user grabbed an existing hoop gizmo handle
-    const hits = raycaster.intersectObjects(hoopGizmoGroup.children, false);
-    if (hits.length > 0) {
-      const handle = hits[0].object;
-      ensureCustomHoopPointsInitialized();
-      state.draggingHoopIndex = handle.userData.hoopIndex ?? 0;
-      state.activeCustomHoopIndex = state.draggingHoopIndex;
-      state.draggingUnitOffset = handle.userData.unitOffset || { dx: 0, dy: 0 };
-      controls.enabled = false;
-      canvas.style.cursor = 'grabbing';
-      syncUIFromConfig();
-      e.stopPropagation();
-    }
-  });
+      // 2. If "Pick Hoop Spot" mode is active, left-clicking anywhere on or near the 3D model
+      // immediately places the hoop AND starts live-sliding it until mouse release!
+      if (state.pickHoopActive) {
+        const pt = getPointerBuildPlateMm(e, canvas);
+        if (pt) {
+          ensureCustomHoopPointsInitialized();
+          const uOff = resolveUnitOffsetForWorldPoint(pt);
+          const localX = Number((pt.x - uOff.dx).toFixed(1));
+          const localY = Number((pt.y - uOff.dy).toFixed(1));
+
+          if (e.shiftKey) {
+            state.config.hoop.customPoints.push({ x: localX, y: localY });
+            state.activeCustomHoopIndex = state.config.hoop.customPoints.length - 1;
+          } else {
+            const idx = Math.min(
+              state.activeCustomHoopIndex,
+              state.config.hoop.customPoints.length - 1
+            );
+            state.config.hoop.customPoints[idx] = { x: localX, y: localY };
+            state.activeCustomHoopIndex = idx;
+          }
+
+          state.draggingHoopIndex = state.activeCustomHoopIndex;
+          state.draggingUnitOffset = uOff;
+          controls.enabled = false;
+          canvas.style.cursor = 'grabbing';
+          syncUIFromConfig();
+          rebuildSceneGeometry();
+          const placed =
+            state.config.hoop.customPoints[state.activeCustomHoopIndex];
+          showToast(
+            `Placed Hoop #${state.activeCustomHoopIndex + 1} at (${placed.x}, ${placed.y} mm)`
+          );
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }
+    },
+    true
+  );
 
   canvas.addEventListener('pointermove', (e) => {
     const pt = getPointerBuildPlateMm(e, canvas);
@@ -856,72 +969,14 @@ function setupHoopPointerInteractions(canvas) {
     canvas.style.cursor = hits.length > 0 ? 'grab' : 'default';
   });
 
-  window.addEventListener('pointerup', (e) => {
+  window.addEventListener('pointerup', () => {
     if (state.draggingHoopIndex >= 0) {
       state.draggingHoopIndex = -1;
       controls.enabled = true;
       canvas.style.cursor = state.pickHoopActive ? 'crosshair' : 'default';
       syncUIFromConfig();
       rebuildSceneGeometry();
-      return;
     }
-
-    // If in "Pick Hoop Spot" mode and user clicked (not dragged camera) on the 3D viewport
-    if (
-      state.pickHoopActive &&
-      downPos &&
-      e.target === canvas &&
-      Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 6
-    ) {
-      const pt = getPointerBuildPlateMm(e, canvas);
-      if (pt) {
-        ensureCustomHoopPointsInitialized();
-        // Convert world plate coordinate to active unit's local coordinate
-        let dx = 0,
-          dy = 0;
-        if (
-          state.lastProject &&
-          state.lastProject.mode === 'individual' &&
-          state.selectedUnitIndex === -1 &&
-          state.lastProject.units.length > 0
-        ) {
-          // Find closest monogram unit to the click point
-          let bestDist = Infinity;
-          for (const u of state.lastProject.units) {
-            const udx = u.plateOffset?.dx || 0;
-            const udy = u.plateOffset?.dy || 0;
-            const d = Math.hypot(pt.x - udx, pt.y - udy);
-            if (d < bestDist) {
-              bestDist = d;
-              dx = udx;
-              dy = udy;
-            }
-          }
-        }
-
-        const localX = Number((pt.x - dx).toFixed(1));
-        const localY = Number((pt.y - dy).toFixed(1));
-
-        if (e.shiftKey) {
-          // Shift + Click adds a new hoop
-          state.config.hoop.customPoints.push({ x: localX, y: localY });
-          state.activeCustomHoopIndex = state.config.hoop.customPoints.length - 1;
-          showToast(`Added Hoop #${state.activeCustomHoopIndex + 1} at (${localX}, ${localY} mm)`);
-        } else {
-          // Normal Click moves the currently active hoop
-          const idx = Math.min(
-            state.activeCustomHoopIndex,
-            state.config.hoop.customPoints.length - 1
-          );
-          state.config.hoop.customPoints[idx] = { x: localX, y: localY };
-          showToast(`Placed Hoop #${idx + 1} at (${localX}, ${localY} mm)`);
-        }
-
-        syncUIFromConfig();
-        rebuildSceneGeometry();
-      }
-    }
-    downPos = null;
   });
 }
 
@@ -951,12 +1006,11 @@ function setPickHoopMode(active) {
 }
 
 /**
- * Render the list of custom hoops in the Hoops sidebar tab
+ * Render the list of custom hoops in the Hoops sidebar tab with inline slide-along-word X sliders
  */
-function renderCustomHoopsList() {
+function renderCustomHoopsList(forceRebuildDOM = false) {
   const listEl = document.getElementById('customHoopsList');
   if (!listEl) return;
-  listEl.innerHTML = '';
 
   const hoopCfg = state.config.hoop;
   const pts =
@@ -964,23 +1018,69 @@ function renderCustomHoopsList() {
       ? hoopCfg.customPoints
       : state.lastProject?.units?.[0]?.hoopAnchors || [];
 
+  const bounds = state.lastProject?.totalBounds || { minX: -120, maxX: 120, maxY: 45 };
+  const minSliderX = Math.floor((bounds.minX || -100) - 8);
+  const maxSliderX = Math.ceil((bounds.maxX || 100) + 8);
+
+  // If the number of rows matches and user is currently dragging an inline slider, update labels in-place
+  if (
+    !forceRebuildDOM &&
+    listEl.children.length === pts.length &&
+    document.activeElement &&
+    listEl.contains(document.activeElement)
+  ) {
+    pts.forEach((pt, idx) => {
+      const row = listEl.children[idx];
+      if (!row) return;
+      const coordEl = row.querySelector('.custom-hoop-coords');
+      if (coordEl) {
+        coordEl.textContent = `Hoop #${idx + 1}: X ${Number(pt.x).toFixed(1)} mm, Y ${Number(pt.y).toFixed(1)} mm`;
+      }
+    });
+    return;
+  }
+
+  listEl.innerHTML = '';
+
   pts.forEach((pt, idx) => {
     const row = document.createElement('div');
     const isSelected =
       hoopCfg.mode === 'custom' && idx === state.activeCustomHoopIndex;
     row.className = `custom-hoop-row ${isSelected ? 'active-target' : ''}`;
 
+    const topLine = document.createElement('div');
+    topLine.className = 'custom-hoop-top';
+
     const label = document.createElement('span');
     label.className = 'custom-hoop-coords';
     label.textContent = `Hoop #${idx + 1}: X ${Number(pt.x).toFixed(1)} mm, Y ${Number(pt.y).toFixed(1)} mm`;
-    label.title = 'Click to select this hoop for placement';
+    label.title = 'Click to select this hoop for placement on the 3D model';
     label.addEventListener('click', () => {
       ensureCustomHoopPointsInitialized();
       state.activeCustomHoopIndex = idx;
       setPickHoopMode(true);
-      rebuildSceneGeometry();
+      renderCustomHoopsList(true);
     });
-    row.appendChild(label);
+    topLine.appendChild(label);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.alignItems = 'center';
+    actions.style.gap = '4px';
+
+    const pickThisBtn = document.createElement('button');
+    pickThisBtn.className = 'chip-btn';
+    pickThisBtn.style.padding = '2px 7px';
+    pickThisBtn.style.fontSize = '10.5px';
+    pickThisBtn.textContent =
+      isSelected && state.pickHoopActive ? '🎯 Click Letter...' : '🎯 Pick Spot';
+    pickThisBtn.addEventListener('click', () => {
+      ensureCustomHoopPointsInitialized();
+      state.activeCustomHoopIndex = idx;
+      setPickHoopMode(true);
+      renderCustomHoopsList(true);
+    });
+    actions.appendChild(pickThisBtn);
 
     if (pts.length > 1) {
       const delBtn = document.createElement('button');
@@ -997,8 +1097,36 @@ function renderCustomHoopsList() {
         syncUIFromConfig();
         rebuildSceneGeometry();
       });
-      row.appendChild(delBtn);
+      actions.appendChild(delBtn);
     }
+
+    topLine.appendChild(actions);
+    row.appendChild(topLine);
+
+    // Inline horizontal slider to slide this hoop smoothly across the letters
+    const sliderWrap = document.createElement('div');
+    sliderWrap.className = 'custom-hoop-slider-wrap';
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = String(minSliderX);
+    slider.max = String(maxSliderX);
+    slider.step = '0.5';
+    slider.value = String(Number(pt.x).toFixed(1));
+    slider.title = `Slide Hoop #${idx + 1} left or right along the word`;
+    slider.addEventListener('input', () => {
+      ensureCustomHoopPointsInitialized();
+      state.activeCustomHoopIndex = idx;
+      const newX = parseFloat(slider.value);
+      const topY = (state.lastProject?.totalBounds?.maxY ?? 30) - 2;
+      state.config.hoop.customPoints[idx] = {
+        x: newX,
+        y: topY,
+      };
+      syncUIFromConfig();
+      rebuildSceneGeometry();
+    });
+    sliderWrap.appendChild(slider);
+    row.appendChild(sliderWrap);
 
     listEl.appendChild(row);
   });
@@ -1468,20 +1596,50 @@ function bindUIEvents() {
 
   document.getElementById('addExtraHoopBtn').addEventListener('click', () => {
     ensureCustomHoopPointsInitialized();
-    const last =
-      state.config.hoop.customPoints[state.config.hoop.customPoints.length - 1] || {
-        x: 0,
-        y: 30,
-      };
+    const bounds = state.lastProject?.totalBounds || {
+      minX: -60,
+      maxX: 60,
+      maxY: 30,
+      width: 120,
+    };
+    const w = Math.max(30, bounds.width || 80);
+    const cx = (bounds.minX + bounds.maxX) / 2 || 0;
+    const candidates = [
+      cx,
+      cx - w * 0.22,
+      cx + w * 0.22,
+      cx - w * 0.38,
+      cx + w * 0.38,
+      cx - w * 0.1,
+      cx + w * 0.1,
+    ];
+    let bestX = cx;
+    let bestMinDist = -1;
+    for (const candX of candidates) {
+      let minDist = Infinity;
+      for (const existing of state.config.hoop.customPoints) {
+        const d = Math.abs(candX - existing.x);
+        if (d < minDist) minDist = d;
+      }
+      if (minDist > bestMinDist) {
+        bestMinDist = minDist;
+        bestX = candX;
+      }
+    }
+
+    const topY = Number(((bounds.maxY || 30) + 2).toFixed(1));
     state.config.hoop.customPoints.push({
-      x: Number((last.x + 18).toFixed(1)),
-      y: Number(last.y.toFixed(1)),
+      x: Number(bestX.toFixed(1)),
+      y: topY,
     });
     state.activeCustomHoopIndex = state.config.hoop.customPoints.length - 1;
     setPickHoopMode(true);
     syncUIFromConfig();
     rebuildSceneGeometry();
-    showToast(`Added Hoop #${state.activeCustomHoopIndex + 1} — click anywhere on the 3D letter to place it!`);
+    renderCustomHoopsList(true);
+    showToast(
+      `Added Hoop #${state.activeCustomHoopIndex + 1} — click anywhere on the 3D letter or drag its slider to move it!`
+    );
   });
 
   window.addEventListener('keydown', (e) => {

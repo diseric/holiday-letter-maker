@@ -683,13 +683,24 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 .custom-hoop-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 5px;
-  padding: 5px 8px;
+  padding: 7px 9px;
   font-size: 11.5px;
+}
+
+.custom-hoop-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.custom-hoop-slider-wrap {
+  width: 100%;
 }
 
 .custom-hoop-row.active-target {

@@ -512,6 +512,81 @@ export function findNearestContourPoint(paths, targetX, targetY) {
 }
 
 /**
+ * Check if a point (xMm, yMm) is inside the filled region of Clipper paths
+ */
+export function isPointInsideClipperPaths(ClipperLib, paths, xMm, yMm) {
+  const pt = new ClipperLib.IntPoint(
+    Math.round(xMm * CLIPPER_SCALE),
+    Math.round(yMm * CLIPPER_SCALE)
+  );
+  let insideCount = 0;
+  for (const poly of paths) {
+    const res = ClipperLib.Clipper.PointInPolygon(pt, poly);
+    if (res !== 0) {
+      // Orientation true = outer polygon, false = inner hole
+      if (ClipperLib.Clipper.Orientation(poly)) {
+        insideCount++;
+      } else {
+        insideCount--;
+      }
+    }
+  }
+  return insideCount > 0;
+}
+
+/**
+ * Snap a user-clicked point (rawX, rawY) on or near the 3D letter so that the hoop
+ * protrudes cleanly from the nearest outer boundary edge instead of being buried inside a thick letter.
+ */
+export function snapHoopPointToOuterEdge(
+  ClipperLib,
+  targetPaths,
+  rawX,
+  rawY,
+  outerRadiusMm = 4.3
+) {
+  if (!targetPaths || targetPaths.length === 0) {
+    return { x: rawX, y: rawY };
+  }
+  const protrusionMm = Math.max(2.2, outerRadiusMm * 0.65);
+  const haloPaths = offsetClipperPaths(ClipperLib, targetPaths, protrusionMm, true);
+  if (haloPaths.length === 0) {
+    return { x: rawX, y: rawY };
+  }
+
+  // If the click point is inside the halo boundary (meaning the user clicked directly on the letter body),
+  // project it outward onto the halo contour so the hoop ring always sticks out from the letter edge!
+  const insideHalo = isPointInsideClipperPaths(ClipperLib, haloPaths, rawX, rawY);
+  if (insideHalo) {
+    const bounds = getClipperBoundsMm(targetPaths);
+    // Slightly bias upward when clicking on the upper half of a letter so it snaps naturally to top edges
+    const biasY = rawY >= bounds.centerY ? rawY + outerRadiusMm * 0.45 : rawY;
+    const snapped = findNearestContourPoint(haloPaths, rawX, biasY);
+    return {
+      x: Number(snapped.x.toFixed(1)),
+      y: Number(snapped.y.toFixed(1)),
+    };
+  }
+
+  // If the user clicked outside the letter, clamp maximum distance so hoops don't float far away
+  const nearestOnHalo = findNearestContourPoint(haloPaths, rawX, rawY);
+  const distFromHalo = Math.hypot(rawX - nearestOnHalo.x, rawY - nearestOnHalo.y);
+  const maxExtraReach = Math.max(12, outerRadiusMm * 2.5);
+  if (distFromHalo > maxExtraReach) {
+    const angle = Math.atan2(rawY - nearestOnHalo.y, rawX - nearestOnHalo.x);
+    return {
+      x: Number((nearestOnHalo.x + Math.cos(angle) * maxExtraReach).toFixed(1)),
+      y: Number((nearestOnHalo.y + Math.sin(angle) * maxExtraReach).toFixed(1)),
+    };
+  }
+
+  return {
+    x: Number(rawX.toFixed(1)),
+    y: Number(rawY.toFixed(1)),
+  };
+}
+
+/**
  * Build Hanging Hoop 2D Clipper Polygon (Outer minus Inner hole + Smart Stem Bridge into the letter/plaque)
  */
 export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
@@ -538,12 +613,16 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
         : [{ x: bounds.centerX, y: bounds.maxY + outerRadius * 0.55 }];
     for (let i = 0; i < customPts.length; i++) {
       const cp = customPts[i];
-      const cx = cp.x + (i === 0 ? manualX : 0);
-      const cy = cp.y + (i === 0 ? manualY : 0);
-      const nearest = findNearestContourPoint(targetPaths, cx, cy);
+      const rawCx = cp.x + (i === 0 ? manualX : 0);
+      const rawCy = cp.y + (i === 0 ? manualY : 0);
+      const snapped =
+        hoopConfig.snapToOuterEdge !== false
+          ? snapHoopPointToOuterEdge(ClipperLib, targetPaths, rawCx, rawCy, outerRadius)
+          : { x: rawCx, y: rawCy };
+      const nearest = findNearestContourPoint(targetPaths, snapped.x, snapped.y);
       rawTargets.push({
-        x: cx,
-        y: cy,
+        x: snapped.x,
+        y: snapped.y,
         stemTarget: nearest,
         index: i,
       });

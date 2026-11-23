@@ -184,4 +184,39 @@ if (projCustomHoop.units[0].hoopAnchors.length !== 2) {
   throw new Error('Expected 2 custom picked hoop anchors');
 }
 
+// Test 6: Sweep hoop X across block lettering NOEL (every 10mm) and verify exact X preservation & dual-peak bridging
+const bungeeBuf = fs.readFileSync('./fonts/Bungee-Regular.ttf');
+const bungeeFont = opentype.parse(
+  bungeeBuf.buffer.slice(bungeeBuf.byteOffset, bungeeBuf.byteOffset + bungeeBuf.byteLength)
+);
+for (let x = -80; x <= 80; x += 10) {
+  const p = buildHolidayLetteringProject(ClipperLib, bungeeFont, {
+    text: 'NOEL',
+    layoutMode: 'connected',
+    letterHeightMm: 60,
+    kerningMm: -2.2,
+    baselineBar: { enabled: true, heightMm: 4.2 },
+    border: { enabled: true, widthMm: 2.4, heightMm: 2.2 },
+    hoop: {
+      mode: 'custom',
+      customPoints: [{ x, y: 35 }],
+      innerDiameterMm: 4.4,
+      wallThicknessMm: 2.4,
+    },
+  });
+  const a = p.units[0].hoopAnchors[0];
+  console.log(
+    'Sweep X:',
+    x,
+    '-> Hoop:',
+    a.x,
+    a.y,
+    'StemTargets:',
+    a.stemTargets.map((t) => `${t.x.toFixed(1)},${t.y.toFixed(1)}`)
+  );
+  if (Math.abs(a.x - x) > 0.01) {
+    throw new Error(`Expected hoop X to equal ${x}, got ${a.x}`);
+  }
+}
+
 console.log('ALL GEOMETRY & STL EXPORT TESTS PASSED!');

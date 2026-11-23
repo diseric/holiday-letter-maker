@@ -431,47 +431,169 @@ export function buildAutoBridgePaths(ClipperLib, paths, strutWidthMm = 2.2) {
 }
 
 /**
- * Find the highest Y coordinate of any polygon vertex within [targetX - searchRadius, targetX + searchRadius].
- * Also returns the exact (x, y) point on the geometry closest to the top at targetX so hoops fuse cleanly.
+ * Find the highest Y coordinate on any polygon segment at the exact vertical line X = targetX.
+ * Interpolates between segment endpoints so flat/angled surfaces between two X vertices are hit in the middle.
  */
-export function findTopAnchorPoint(paths, targetX, searchRadiusMm = 10) {
-  const bounds = getClipperBoundsMm(paths);
-  let bestPt = null;
-  let bestScore = -Infinity;
-
+export function findTopSurfaceYAtX(paths, targetX) {
+  let maxY = -Infinity;
   for (const path of paths) {
-    for (const pt of path) {
-      const x = pt.X / CLIPPER_SCALE;
-      const y = pt.Y / CLIPPER_SCALE;
-      const dx = Math.abs(x - targetX);
-      if (dx <= searchRadiusMm) {
-        // Favor high Y, slightly penalize horizontal distance from targetX
-        const score = y - dx * 0.25;
-        if (score > bestScore) {
-          bestScore = score;
-          bestPt = { x, y };
+    const len = path.length;
+    for (let i = 0; i < len; i++) {
+      const p1 = path[i];
+      const p2 = path[(i + 1) % len];
+      const x1 = p1.X / CLIPPER_SCALE;
+      const y1 = p1.Y / CLIPPER_SCALE;
+      const x2 = p2.X / CLIPPER_SCALE;
+      const y2 = p2.Y / CLIPPER_SCALE;
+      const minX = Math.min(x1, x2);
+      const maxX = Math.max(x1, x2);
+      if (targetX >= minX - 1e-4 && targetX <= maxX + 1e-4) {
+        const dx = x2 - x1;
+        const y =
+          Math.abs(dx) < 1e-5
+            ? Math.max(y1, y2)
+            : y1 + ((targetX - x1) / dx) * (y2 - y1);
+        if (y > maxY) {
+          maxY = y;
         }
       }
     }
   }
+  return isFinite(maxY) ? { x: targetX, y: maxY } : null;
+}
 
-  if (bestPt) return bestPt;
+/**
+ * Evaluate all polygon segments continuously (not just corner vertices!) within [minSearchX, maxSearchX]
+ * to find the highest anchor point near targetX.
+ */
+export function findTopAnchorInInterval(paths, targetX, minSearchX, maxSearchX, distancePenalty = 0.35) {
+  let bestPt = null;
+  let bestScore = -Infinity;
 
-  // Fallback: find nearest vertex to (targetX, bounds.maxY)
-  let minDist = Infinity;
-  let nearest = { x: targetX, y: bounds.maxY };
   for (const path of paths) {
-    for (const pt of path) {
-      const x = pt.X / CLIPPER_SCALE;
-      const y = pt.Y / CLIPPER_SCALE;
-      const d = Math.hypot(x - targetX, y - bounds.maxY);
-      if (d < minDist) {
-        minDist = d;
-        nearest = { x, y };
+    const len = path.length;
+    for (let i = 0; i < len; i++) {
+      const p1 = path[i];
+      const p2 = path[(i + 1) % len];
+      const x1 = p1.X / CLIPPER_SCALE;
+      const y1 = p1.Y / CLIPPER_SCALE;
+      const x2 = p2.X / CLIPPER_SCALE;
+      const y2 = p2.Y / CLIPPER_SCALE;
+
+      const segMinX = Math.min(x1, x2);
+      const segMaxX = Math.max(x1, x2);
+      if (segMaxX < minSearchX || segMinX > maxSearchX) continue;
+
+      // Candidate X positions along this segment within [minSearchX, maxSearchX]:
+      // 1) The point on this segment closest in X to targetX (hits the exact middle of horizontal/angled edges!)
+      // 2) The clipped endpoints of the segment
+      const clampLow = Math.max(segMinX, minSearchX);
+      const clampHigh = Math.min(segMaxX, maxSearchX);
+      const closestX = Math.max(clampLow, Math.min(clampHigh, targetX));
+      const candidateXs = [closestX, clampLow, clampHigh];
+
+      const dxSeg = x2 - x1;
+      for (const cx of candidateXs) {
+        const cy =
+          Math.abs(dxSeg) < 1e-5
+            ? Math.max(y1, y2)
+            : y1 + ((cx - x1) / dxSeg) * (y2 - y1);
+        const dx = Math.abs(cx - targetX);
+        const score = cy - dx * distancePenalty;
+        if (score > bestScore) {
+          bestScore = score;
+          bestPt = { x: cx, y: cy };
+        }
       }
     }
   }
-  return nearest;
+  return bestPt;
+}
+
+/**
+ * Find the highest Y coordinate on any polygon segment within [targetX - searchRadius, targetX + searchRadius].
+ * Continuously interpolates along segments so flat block-letter surfaces anchor in the middle at targetX.
+ */
+export function findTopAnchorPoint(paths, targetX, searchRadiusMm = 12) {
+  const bounds = getClipperBoundsMm(paths);
+  const pt = findTopAnchorInInterval(
+    paths,
+    targetX,
+    targetX - searchRadiusMm,
+    targetX + searchRadiusMm,
+    0.35
+  );
+  if (pt) return pt;
+
+  return findNearestContourPoint(paths, targetX, bounds.maxY);
+}
+
+/**
+ * Resolve anchor point(s) for a hoop placed at X = targetX.
+ * - If targetX is over a continuous top surface, anchors directly to the middle of that surface at X = targetX.
+ * - If targetX is in the middle between two separate points/peaks on the X axis (a valley like M/U/V/H or gap between letters),
+ *   keeps the hoop centered at X = targetX and returns BOTH the left peak and right peak as stem targets!
+ */
+export function resolveHoopAnchorAtX(paths, targetX, outerRadiusMm = 4.3, customYMm = null) {
+  const bounds = getClipperBoundsMm(paths);
+  const directTop = findTopSurfaceYAtX(paths, targetX);
+  const searchSpan = Math.max(18, Math.min(36, bounds.width * 0.35));
+
+  // Find highest peak to the left [targetX - searchSpan, targetX - 1.0] and right [targetX + 1.0, targetX + searchSpan]
+  const leftPeak = findTopAnchorInInterval(
+    paths,
+    targetX,
+    targetX - searchSpan,
+    targetX - 0.8,
+    0.18
+  );
+  const rightPeak = findTopAnchorInInterval(
+    paths,
+    targetX,
+    targetX + 0.8,
+    targetX + searchSpan,
+    0.18
+  );
+
+  // Check if targetX sits in a valley or gap between leftPeak and rightPeak on the X axis
+  if (leftPeak && rightPeak && rightPeak.x - leftPeak.x >= 1.5) {
+    const t = (targetX - leftPeak.x) / (rightPeak.x - leftPeak.x);
+    const bridgeLineY = leftPeak.y + t * (rightPeak.y - leftPeak.y);
+
+    // If there is a gap at targetX OR the surface at targetX dips more than 2.0mm below the peak bridge line:
+    if (!directTop || bridgeLineY - directTop.y > 2.0) {
+      const defaultHoopY = Math.max(leftPeak.y, rightPeak.y, bridgeLineY) + outerRadiusMm * 0.55;
+      const hoopY =
+        customYMm !== null && isFinite(customYMm)
+          ? Math.max(bridgeLineY - outerRadiusMm * 0.2, customYMm)
+          : defaultHoopY;
+      const targets = [leftPeak, rightPeak];
+      if (directTop && hoopY - directTop.y < outerRadiusMm * 3.2) {
+        targets.push(directTop);
+      }
+      return {
+        x: Number(targetX.toFixed(1)),
+        y: Number(hoopY.toFixed(1)),
+        stemTarget: leftPeak,
+        stemTargets: targets,
+      };
+    }
+  }
+
+  // Otherwise targetX sits directly over a top surface (e.g., middle of a block letter bar)
+  const anchor = directTop || findTopAnchorPoint(paths, targetX, searchSpan);
+  const defaultHoopY = anchor.y + outerRadiusMm * 0.6;
+  const hoopY =
+    customYMm !== null && isFinite(customYMm)
+      ? Math.max(anchor.y + outerRadiusMm * 0.25, customYMm)
+      : defaultHoopY;
+
+  return {
+    x: Number(targetX.toFixed(1)),
+    y: Number(hoopY.toFixed(1)),
+    stemTarget: anchor,
+    stemTargets: [anchor],
+  };
 }
 
 /**
@@ -613,70 +735,99 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
         : [{ x: bounds.centerX, y: bounds.maxY + outerRadius * 0.55 }];
     for (let i = 0; i < customPts.length; i++) {
       const cp = customPts[i];
-      const rawCx = cp.x + (i === 0 ? manualX : 0);
+      const rawCx = Math.max(
+        bounds.minX - outerRadius * 2,
+        Math.min(bounds.maxX + outerRadius * 2, cp.x + (i === 0 ? manualX : 0))
+      );
       const rawCy = cp.y + (i === 0 ? manualY : 0);
-      const snapped =
-        hoopConfig.snapToOuterEdge !== false
-          ? snapHoopPointToOuterEdge(ClipperLib, targetPaths, rawCx, rawCy, outerRadius)
-          : { x: rawCx, y: rawCy };
-      const nearest = findNearestContourPoint(targetPaths, snapped.x, snapped.y);
+
+      // Keep the user's exact X coordinate (rawCx) so it can sit right in the middle of a surface
+      // or in the middle between two points/peaks on the X axis!
+      const resolved = resolveHoopAnchorAtX(
+        targetPaths,
+        rawCx,
+        outerRadius,
+        cp.lockY ? rawCy : null
+      );
       rawTargets.push({
-        x: snapped.x,
-        y: snapped.y,
-        stemTarget: nearest,
+        x: resolved.x,
+        y: resolved.y,
+        stemTarget: resolved.stemTarget,
+        stemTargets: resolved.stemTargets,
         index: i,
       });
     }
   } else if (hoopConfig.mode === 'top-center') {
-    const anchor = findTopAnchorPoint(targetPaths, bounds.centerX + manualX, Math.max(8, bounds.width * 0.18));
+    const resolved = resolveHoopAnchorAtX(
+      targetPaths,
+      bounds.centerX + manualX,
+      outerRadius,
+      null
+    );
     rawTargets.push({
-      x: bounds.centerX + manualX,
-      y: bounds.maxY + outerRadius * 0.55 + manualY,
-      stemTarget: anchor,
+      x: resolved.x,
+      y: resolved.y + manualY,
+      stemTarget: resolved.stemTarget,
+      stemTargets: resolved.stemTargets,
       index: 0,
     });
   } else if (hoopConfig.mode === 'smart-peak') {
-    const anchor = findTopAnchorPoint(targetPaths, bounds.centerX + manualX, Math.max(18, bounds.width * 0.42));
+    const peakAnchor = findTopAnchorPoint(
+      targetPaths,
+      bounds.centerX + manualX,
+      Math.max(18, bounds.width * 0.42)
+    );
+    const resolved = resolveHoopAnchorAtX(
+      targetPaths,
+      peakAnchor.x,
+      outerRadius,
+      null
+    );
     rawTargets.push({
-      x: anchor.x + manualX,
-      y: anchor.y + outerRadius * 0.6 + manualY,
-      stemTarget: anchor,
+      x: resolved.x,
+      y: resolved.y + manualY,
+      stemTarget: resolved.stemTarget,
+      stemTargets: resolved.stemTargets,
       index: 0,
     });
   } else if (hoopConfig.mode === 'dual-balance') {
     const spread = Math.max(0.15, Math.min(0.48, (hoopConfig.spreadPercent || 65) / 200));
     const leftX = bounds.centerX - bounds.width * spread + manualX;
     const rightX = bounds.centerX + bounds.width * spread + manualX;
-    const leftAnchor = findTopAnchorPoint(targetPaths, leftX, Math.max(10, bounds.width * 0.18));
-    const rightAnchor = findTopAnchorPoint(targetPaths, rightX, Math.max(10, bounds.width * 0.18));
+    const leftResolved = resolveHoopAnchorAtX(targetPaths, leftX, outerRadius, null);
+    const rightResolved = resolveHoopAnchorAtX(targetPaths, rightX, outerRadius, null);
     rawTargets.push({
-      x: leftAnchor.x,
-      y: leftAnchor.y + outerRadius * 0.6 + manualY,
-      stemTarget: leftAnchor,
+      x: leftResolved.x,
+      y: leftResolved.y + manualY,
+      stemTarget: leftResolved.stemTarget,
+      stemTargets: leftResolved.stemTargets,
       index: 0,
     });
     rawTargets.push({
-      x: rightAnchor.x,
-      y: rightAnchor.y + outerRadius * 0.6 + manualY,
-      stemTarget: rightAnchor,
+      x: rightResolved.x,
+      y: rightResolved.y + manualY,
+      stemTarget: rightResolved.stemTarget,
+      stemTargets: rightResolved.stemTargets,
       index: 1,
     });
   } else if (hoopConfig.mode === 'top-left') {
     const targetX = bounds.minX + bounds.width * 0.18 + manualX;
-    const anchor = findTopAnchorPoint(targetPaths, targetX, Math.max(12, bounds.width * 0.25));
+    const resolved = resolveHoopAnchorAtX(targetPaths, targetX, outerRadius, null);
     rawTargets.push({
-      x: anchor.x,
-      y: anchor.y + outerRadius * 0.6 + manualY,
-      stemTarget: anchor,
+      x: resolved.x,
+      y: resolved.y + manualY,
+      stemTarget: resolved.stemTarget,
+      stemTargets: resolved.stemTargets,
       index: 0,
     });
   } else if (hoopConfig.mode === 'top-right') {
     const targetX = bounds.maxX - bounds.width * 0.18 + manualX;
-    const anchor = findTopAnchorPoint(targetPaths, targetX, Math.max(12, bounds.width * 0.25));
+    const resolved = resolveHoopAnchorAtX(targetPaths, targetX, outerRadius, null);
     rawTargets.push({
-      x: anchor.x,
-      y: anchor.y + outerRadius * 0.6 + manualY,
-      stemTarget: anchor,
+      x: resolved.x,
+      y: resolved.y + manualY,
+      stemTarget: resolved.stemTarget,
+      stemTargets: resolved.stemTargets,
       index: 0,
     });
   }
@@ -687,9 +838,14 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
   for (const t of rawTargets) {
     const ax = t.x;
     const ay = t.y;
-    const tx = t.stemTarget ? t.stemTarget.x : ax;
-    const ty = t.stemTarget ? t.stemTarget.y : ay - outerRadius;
-    const dirAngle = Math.atan2(ty - ay, tx - ax);
+    const targets =
+      t.stemTargets && t.stemTargets.length > 0
+        ? t.stemTargets
+        : t.stemTarget
+        ? [t.stemTarget]
+        : [];
+    const primaryTarget = targets[0] || { x: ax, y: ay - outerRadius };
+    const dirAngle = Math.atan2(primaryTarget.y - ay, primaryTarget.x - ax);
 
     if (style === 'slot') {
       // Wide ribbon slot (stadium oval)
@@ -700,24 +856,27 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       allOuterPaths.push(makeRoundedRectPath(t.x, t.y, outerW, outerH, outerH / 2));
       allInnerHoles.push(makeRoundedRectPath(t.x, t.y, slotWidth, slotHeight, slotHeight / 2));
     } else if (style === 'teardrop') {
-      // Reinforced teardrop lug oriented toward the nearest contour point (t.stemTarget)
       const circle = makeCirclePath(t.x, t.y, outerRadius, 48);
       allOuterPaths.push(circle);
-      const distToTarget = Math.hypot(tx - ax, ty - ay);
-      const reach = Math.max(outerRadius * 0.9, distToTarget + 1.6);
-      const bx = ax + Math.cos(dirAngle) * reach;
-      const by = ay + Math.sin(dirAngle) * reach;
-      const nx = -Math.sin(dirAngle);
-      const ny = Math.cos(dirAngle);
-      const startW = outerRadius * 0.92;
-      const endW = outerRadius * 1.15;
-      const skirt = [
-        { X: Math.round((ax + nx * startW) * CLIPPER_SCALE), Y: Math.round((ay + ny * startW) * CLIPPER_SCALE) },
-        { X: Math.round((ax - nx * startW) * CLIPPER_SCALE), Y: Math.round((ay - ny * startW) * CLIPPER_SCALE) },
-        { X: Math.round((bx - nx * endW) * CLIPPER_SCALE), Y: Math.round((by - ny * endW) * CLIPPER_SCALE) },
-        { X: Math.round((bx + nx * endW) * CLIPPER_SCALE), Y: Math.round((by + ny * endW) * CLIPPER_SCALE) },
-      ];
-      allOuterPaths.push(skirt);
+      if (targets.length === 1) {
+        // Single surface target directly below/nearby: flare teardrop skirt toward it
+        const tx = primaryTarget.x;
+        const ty = primaryTarget.y;
+        const distToTarget = Math.hypot(tx - ax, ty - ay);
+        const reach = Math.max(outerRadius * 0.9, distToTarget + 1.6);
+        const bx = ax + Math.cos(dirAngle) * reach;
+        const by = ay + Math.sin(dirAngle) * reach;
+        const nx = -Math.sin(dirAngle);
+        const ny = Math.cos(dirAngle);
+        const startW = outerRadius * 0.92;
+        const endW = outerRadius * 1.15;
+        allOuterPaths.push([
+          { X: Math.round((ax + nx * startW) * CLIPPER_SCALE), Y: Math.round((ay + ny * startW) * CLIPPER_SCALE) },
+          { X: Math.round((ax - nx * startW) * CLIPPER_SCALE), Y: Math.round((ay - ny * startW) * CLIPPER_SCALE) },
+          { X: Math.round((bx - nx * endW) * CLIPPER_SCALE), Y: Math.round((by - ny * endW) * CLIPPER_SCALE) },
+          { X: Math.round((bx + nx * endW) * CLIPPER_SCALE), Y: Math.round((by + ny * endW) * CLIPPER_SCALE) },
+        ]);
+      }
       allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
     } else {
       // Classic round ring
@@ -725,21 +884,26 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
     }
 
-    // Automatic stem bridge connecting hoop body into the letter/plaque anchor point in any direction
-    if (hoopConfig.autoStemBridge !== false && t.stemTarget) {
-      const distToTarget = Math.hypot(tx - ax, ty - ay);
-      const reach = distToTarget + 1.8; // penetrate 1.8mm into solid letter geometry
-      const bx = ax + Math.cos(dirAngle) * reach;
-      const by = ay + Math.sin(dirAngle) * reach;
-      const stemHalfW = Math.max(wallWidth * 0.85, outerRadius * 0.55);
-      const nx = -Math.sin(dirAngle) * stemHalfW;
-      const ny = Math.cos(dirAngle) * stemHalfW;
-      allOuterPaths.push([
-        { X: Math.round((ax + nx) * CLIPPER_SCALE), Y: Math.round((ay + ny) * CLIPPER_SCALE) },
-        { X: Math.round((ax - nx) * CLIPPER_SCALE), Y: Math.round((ay - ny) * CLIPPER_SCALE) },
-        { X: Math.round((bx - nx) * CLIPPER_SCALE), Y: Math.round((by - ny) * CLIPPER_SCALE) },
-        { X: Math.round((bx + nx) * CLIPPER_SCALE), Y: Math.round((by + ny) * CLIPPER_SCALE) },
-      ]);
+    // Automatic stem bridge(s) connecting hoop body into the surface (or BOTH left & right peaks when between two X points!)
+    if (hoopConfig.autoStemBridge !== false && targets.length > 0) {
+      for (const st of targets) {
+        const tx = st.x;
+        const ty = st.y;
+        const sAngle = Math.atan2(ty - ay, tx - ax);
+        const distToTarget = Math.hypot(tx - ax, ty - ay);
+        const reach = distToTarget + 1.8; // penetrate 1.8mm into solid letter geometry
+        const bx = ax + Math.cos(sAngle) * reach;
+        const by = ay + Math.sin(sAngle) * reach;
+        const stemHalfW = Math.max(wallWidth * 0.85, outerRadius * 0.52);
+        const nx = -Math.sin(sAngle) * stemHalfW;
+        const ny = Math.cos(sAngle) * stemHalfW;
+        allOuterPaths.push([
+          { X: Math.round((ax + nx) * CLIPPER_SCALE), Y: Math.round((ay + ny) * CLIPPER_SCALE) },
+          { X: Math.round((ax - nx) * CLIPPER_SCALE), Y: Math.round((ay - ny) * CLIPPER_SCALE) },
+          { X: Math.round((bx - nx) * CLIPPER_SCALE), Y: Math.round((by - ny) * CLIPPER_SCALE) },
+          { X: Math.round((bx + nx) * CLIPPER_SCALE), Y: Math.round((by + ny) * CLIPPER_SCALE) },
+        ]);
+      }
     }
   }
 

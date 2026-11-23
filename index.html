@@ -33,12 +33,13 @@
     <!-- One-Click Holiday Presets -->
     <div class="presets-bar" id="presetsBar">
       <span class="preset-label">Presets:</span>
+      <button class="preset-btn" data-preset="block-letters">🧱 Bold Block Letters</button>
       <button class="preset-btn active" data-preset="script-name">✨ Script Name</button>
       <button class="preset-btn" data-preset="santa-monogram">🎅 Santa Hat Initial</button>
       <button class="preset-btn" data-preset="contour-sign">❄️ Contour Plaque</button>
       <button class="preset-btn" data-preset="recessed-bauble">🔮 Engraved Bauble</button>
-      <button class="preset-btn" data-preset="batch-stocking">🎁 Batch Family Initials</button>
-      <button class="preset-btn" data-preset="reindeer-word">🦌 Antler Nameplate</button>
+      <button class="preset-btn" data-preset="batch-stocking">🎁 Batch Initials</button>
+      <button class="preset-btn" data-preset="reindeer-word">🦌 Antler Sign</button>
     </div>
 
     <!-- STL Export Actions -->
@@ -118,17 +119,52 @@
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="fontSelect">Holiday Font Family</label>
+              <label class="field-label" for="fontSelect">
+                <span>Font Family (18 Built-in)</span>
+                <span class="field-value">Block &amp; Script</span>
+              </label>
               <select id="fontSelect">
-                <option value="Lobster-Regular.ttf">Lobster (Thick Connected Script — Best for Names)</option>
-                <option value="CinzelDecorative-Bold.ttf">Cinzel Decorative Bold (Royal Monogram Swash)</option>
-                <option value="MountainsOfChristmas-Bold.ttf">Mountains of Christmas Bold (Festive Display)</option>
-                <option value="BerkshireSwash-Regular.ttf">Berkshire Swash (Storybook Holiday Serif)</option>
-                <option value="Pacifico-Regular.ttf">Pacifico (Rounded Cursive Script)</option>
-                <option value="GreatVibes-Regular.ttf">Great Vibes (Elegant Calligraphy Script)</option>
-                <option value="AbrilFatface-Regular.ttf">Abril Fatface (Classic High-Contrast Serif)</option>
-                <option value="TitanOne-Regular.ttf">Titan One (Chunky Rounded Block Letters)</option>
+                <optgroup label="🧱 Solid Block &amp; Heavy Sans Lettering">
+                  <option value="Bungee-Regular.ttf">Bungee (Heavy Signage Block Capitals)</option>
+                  <option value="Anton-Regular.ttf">Anton (Tall Impact Mantel Block Letters)</option>
+                  <option value="BebasNeue-Regular.ttf">Bebas Neue (Clean Architectural All-Caps Block)</option>
+                  <option value="ArchivoBlack-Regular.ttf">Archivo Black (Wide Geometric Block)</option>
+                  <option value="TitanOne-Regular.ttf">Titan One (Chunky Rounded Bubble Block)</option>
+                  <option value="LilitaOne-Regular.ttf">Lilita One (Soft Craft Block Letters)</option>
+                  <option value="Righteous-Regular.ttf">Righteous (Modern Deco Geometric Block)</option>
+                </optgroup>
+                <optgroup label="🏛️ Slab, Collegiate &amp; Stencil Block">
+                  <option value="AlfaSlabOne-Regular.ttf">Alfa Slab One (Extra-Heavy Slab Serif Block)</option>
+                  <option value="Ultra-Regular.ttf">Ultra (Wood-Type Poster Slab Block)</option>
+                  <option value="Graduate-Regular.ttf">Graduate (Collegiate Varsity Athletic Block)</option>
+                  <option value="BlackOpsOne-Regular.ttf">Black Ops One (Bridged Stencil Block)</option>
+                </optgroup>
+                <optgroup label="🎄 Festive &amp; Regal Display Serifs">
+                  <option value="MountainsOfChristmas-Bold.ttf">Mountains of Christmas Bold (Festive Display)</option>
+                  <option value="CinzelDecorative-Bold.ttf">Cinzel Decorative Bold (Royal Monogram Swash)</option>
+                  <option value="BerkshireSwash-Regular.ttf">Berkshire Swash (Storybook Holiday Serif)</option>
+                  <option value="AbrilFatface-Regular.ttf">Abril Fatface (Classic High-Contrast Serif)</option>
+                </optgroup>
+                <optgroup label="✨ Connected Script &amp; Calligraphy">
+                  <option value="Lobster-Regular.ttf">Lobster (Thick Connected Script — Best for Names)</option>
+                  <option value="Pacifico-Regular.ttf">Pacifico (Rounded Cursive Script)</option>
+                  <option value="GreatVibes-Regular.ttf">Great Vibes (Elegant Calligraphy Script)</option>
+                </optgroup>
               </select>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Quick Block Lettering Styles</span>
+              <div class="chip-row" id="blockFontQuickChips">
+                <button class="chip-btn" data-font="Bungee-Regular.ttf">Bungee Sign Block</button>
+                <button class="chip-btn" data-font="Anton-Regular.ttf">Anton Tall Block</button>
+                <button class="chip-btn" data-font="AlfaSlabOne-Regular.ttf">Alfa Slab Block</button>
+                <button class="chip-btn" data-font="Graduate-Regular.ttf">Varsity Block</button>
+                <button class="chip-btn" data-font="BebasNeue-Regular.ttf">Bebas Clean Block</button>
+                <button class="chip-btn" data-font="ArchivoBlack-Regular.ttf">Archivo Heavy</button>
+                <button class="chip-btn" data-font="BlackOpsOne-Regular.ttf">Stencil Block</button>
+                <button class="chip-btn" data-font="TitanOne-Regular.ttf">Titan Bubble</button>
+              </div>
             </div>
 
             <div class="field-group">

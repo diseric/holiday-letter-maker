@@ -57,6 +57,51 @@ const PALETTES = {
 
 // Curated One-Click Holiday Presets
 const PRESETS = {
+  'block-letters': {
+    text: 'NOEL',
+    layoutMode: 'connected',
+    fontFile: 'Bungee-Regular.ttf',
+    letterHeightMm: 60,
+    kerningMm: -2.2,
+    letterThicknessMm: 5.0,
+    bevelMm: 0.4,
+    autoBridgeIslands: true,
+    bridgeWidthMm: 2.6,
+    baselineBar: { enabled: true, heightMm: 4.2, offsetYMm: 0 },
+    hoop: {
+      mode: 'dual-balance',
+      style: 'teardrop',
+      innerDiameterMm: 4.4,
+      wallThicknessMm: 2.4,
+      matchThickness: true,
+      thicknessMm: 4.0,
+      offsetXMm: 0,
+      offsetYMm: 0,
+      spreadPercent: 68,
+      autoStemBridge: true,
+    },
+    plaque: {
+      style: 'none',
+      letterMode: 'raised',
+      marginMm: 5.0,
+      baseThicknessMm: 2.4,
+      fillInteriorHoles: true,
+    },
+    border: {
+      enabled: true,
+      widthMm: 2.4,
+      heightMm: 2.2,
+    },
+    accent: {
+      type: 'santa-hat',
+      anchor: 'top-left',
+      scalePercent: 95,
+      rotationDeg: -10,
+      offsetXMm: -1.5,
+      offsetYMm: -2.0,
+      reliefHeightMm: 0.9,
+    },
+  },
   'script-name': {
     text: 'Christmas',
     layoutMode: 'connected',
@@ -1159,6 +1204,10 @@ function syncUIFromConfig() {
   document.getElementById('charCountBadge').textContent = `${cfg.text.length} chars`;
   document.getElementById('fontSelect').value = cfg.fontFile || 'Lobster-Regular.ttf';
 
+  document.querySelectorAll('#blockFontQuickChips .chip-btn').forEach((chip) => {
+    chip.classList.toggle('active', chip.dataset.font === cfg.fontFile);
+  });
+
   // Layout mode buttons
   document.querySelectorAll('#layoutModeGroup .seg-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.value === cfg.layoutMode);
@@ -1320,8 +1369,19 @@ function bindUIEvents() {
   // Font Selection
   document.getElementById('fontSelect').addEventListener('change', async (e) => {
     state.config.fontFile = e.target.value;
+    syncUIFromConfig();
     state.activeFont = await loadFontByName(state.config.fontFile);
     rebuildSceneGeometry();
+  });
+
+  // Quick Block Font Chips
+  document.querySelectorAll('#blockFontQuickChips .chip-btn').forEach((chip) => {
+    chip.addEventListener('click', async () => {
+      state.config.fontFile = chip.dataset.font;
+      syncUIFromConfig();
+      state.activeFont = await loadFontByName(state.config.fontFile);
+      rebuildSceneGeometry();
+    });
   });
 
   // Custom Font Upload (.TTF / .OTF)

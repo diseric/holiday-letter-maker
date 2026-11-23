@@ -568,9 +568,6 @@ export function resolveHoopAnchorAtX(paths, targetX, outerRadiusMm = 4.3, custom
           ? Math.max(bridgeLineY - outerRadiusMm * 0.2, customYMm)
           : defaultHoopY;
       const targets = [leftPeak, rightPeak];
-      if (directTop && hoopY - directTop.y < outerRadiusMm * 3.2) {
-        targets.push(directTop);
-      }
       return {
         x: Number(targetX.toFixed(1)),
         y: Number(hoopY.toFixed(1)),
@@ -887,14 +884,11 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
     // Automatic stem bridge(s) connecting hoop body into the surface (or BOTH left & right peaks when between two X points!)
     if (hoopConfig.autoStemBridge !== false && targets.length > 0) {
       for (const st of targets) {
-        const tx = st.x;
-        const ty = st.y;
-        const sAngle = Math.atan2(ty - ay, tx - ax);
-        const distToTarget = Math.hypot(tx - ax, ty - ay);
-        const reach = distToTarget + 1.8; // penetrate 1.8mm into solid letter geometry
-        const bx = ax + Math.cos(sAngle) * reach;
-        const by = ay + Math.sin(sAngle) * reach;
-        const stemHalfW = Math.max(wallWidth * 0.85, outerRadius * 0.52);
+        // Aim 1.6mm vertically downward inside the solid letter beneath the surface contact point (st.x, st.y)
+        const bx = st.x;
+        const by = st.y - 1.6;
+        const sAngle = Math.atan2(by - ay, bx - ax);
+        const stemHalfW = Math.max(wallWidth * 0.8, outerRadius * 0.48);
         const nx = -Math.sin(sAngle) * stemHalfW;
         const ny = Math.cos(sAngle) * stemHalfW;
         allOuterPaths.push([

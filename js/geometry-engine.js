@@ -706,15 +706,39 @@ export function snapHoopPointToOuterEdge(
 }
 
 /**
- * Build Hanging Hoop 2D Clipper Polygon (Outer minus Inner hole + Smart Stem Bridge into the letter/plaque)
+ * Build a smooth tapered capsule (convex hull of two circles) from (x1, y1, r1) to (x2, y2, r2)
+ */
+export function makeTaperedCapsulePaths(ClipperLib, x1, y1, r1, x2, y2, r2) {
+  const c1 = makeCirclePath(x1, y1, Math.max(0.4, r1), 40);
+  const c2 = makeCirclePath(x2, y2, Math.max(0.4, r2), 32);
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  if (dist < 0.2) return [c1];
+
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const nx = -Math.sin(angle);
+  const ny = Math.cos(angle);
+  const quad = [
+    { X: Math.round((x1 + nx * r1) * CLIPPER_SCALE), Y: Math.round((y1 + ny * r1) * CLIPPER_SCALE) },
+    { X: Math.round((x1 - nx * r1) * CLIPPER_SCALE), Y: Math.round((y1 - ny * r1) * CLIPPER_SCALE) },
+    { X: Math.round((x2 - nx * r2) * CLIPPER_SCALE), Y: Math.round((y2 - ny * r2) * CLIPPER_SCALE) },
+    { X: Math.round((x2 + nx * r2) * CLIPPER_SCALE), Y: Math.round((y2 + ny * r2) * CLIPPER_SCALE) },
+  ];
+  return unionClipperPaths(ClipperLib, [c1, c2, quad]);
+}
+
+/**
+ * Build Hanging Hoop 2D Clipper Polygon naturally incorporated into targetPaths (main letter/plaque body)
+ * with smooth concave 2D fillets and curved flush mating along the target contour.
  */
 export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
   if (!hoopConfig || hoopConfig.mode === 'none') {
-    return { hoopPaths: [], anchors: [] };
+    return { hoopPaths: [], holePaths: [], filletedBodyPaths: targetPaths, anchors: [] };
   }
 
   const bounds = getClipperBoundsMm(targetPaths);
-  if (bounds.width <= 0) return { hoopPaths: [], anchors: [] };
+  if (bounds.width <= 0) {
+    return { hoopPaths: [], holePaths: [], filletedBodyPaths: targetPaths, anchors: [] };
+  }
 
   const innerRadius = Math.max(0.6, (hoopConfig.innerDiameterMm || 4.0) / 2);
   const wallWidth = Math.max(1.0, hoopConfig.wallThicknessMm || 2.2);
@@ -729,7 +753,7 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
     const customPts =
       Array.isArray(hoopConfig.customPoints) && hoopConfig.customPoints.length > 0
         ? hoopConfig.customPoints
-        : [{ x: bounds.centerX, y: bounds.maxY + outerRadius * 0.55 }];
+        : [{ x: bounds.centerX, y: bounds.maxY + outerRadius * 0.5 }];
     for (let i = 0; i < customPts.length; i++) {
       const cp = customPts[i];
       const rawCx = Math.max(
@@ -738,8 +762,6 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       );
       const rawCy = cp.y + (i === 0 ? manualY : 0);
 
-      // Keep the user's exact X coordinate (rawCx) so it can sit right in the middle of a surface
-      // or in the middle between two points/peaks on the X axis!
       const resolved = resolveHoopAnchorAtX(
         targetPaths,
         rawCx,
@@ -829,6 +851,18 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
     });
   }
 
+  // Erode targetPaths inward to find the interior skeleton/core of the letter strokes.
+  // Anchoring the bottom circle of the tapered stem onto this inward-offset core guarantees
+  // the stem NEVER pokes out past the curved outer edges of a letter!
+  const coreRadius = Math.min(1.35, wallWidth * 0.62);
+  let innerCorePaths = offsetClipperPaths(ClipperLib, targetPaths, -coreRadius, false);
+  if (innerCorePaths.length === 0) {
+    innerCorePaths = offsetClipperPaths(ClipperLib, targetPaths, -0.6, false);
+  }
+  if (innerCorePaths.length === 0) {
+    innerCorePaths = targetPaths;
+  }
+
   const allOuterPaths = [];
   const allInnerHoles = [];
 
@@ -841,8 +875,6 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
         : t.stemTarget
         ? [t.stemTarget]
         : [];
-    const primaryTarget = targets[0] || { x: ax, y: ay - outerRadius };
-    const dirAngle = Math.atan2(primaryTarget.y - ay, primaryTarget.x - ax);
 
     if (style === 'slot') {
       // Wide ribbon slot (stadium oval)
@@ -852,61 +884,91 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       const outerH = slotHeight + wallWidth * 2;
       allOuterPaths.push(makeRoundedRectPath(t.x, t.y, outerW, outerH, outerH / 2));
       allInnerHoles.push(makeRoundedRectPath(t.x, t.y, slotWidth, slotHeight, slotHeight / 2));
-    } else if (style === 'teardrop') {
-      const circle = makeCirclePath(t.x, t.y, outerRadius, 48);
-      allOuterPaths.push(circle);
-      if (targets.length === 1) {
-        // Single surface target directly below/nearby: flare teardrop skirt toward it
-        const tx = primaryTarget.x;
-        const ty = primaryTarget.y;
-        const distToTarget = Math.hypot(tx - ax, ty - ay);
-        const reach = Math.max(outerRadius * 0.9, distToTarget + 1.6);
-        const bx = ax + Math.cos(dirAngle) * reach;
-        const by = ay + Math.sin(dirAngle) * reach;
-        const nx = -Math.sin(dirAngle);
-        const ny = Math.cos(dirAngle);
-        const startW = outerRadius * 0.92;
-        const endW = outerRadius * 1.15;
-        allOuterPaths.push([
-          { X: Math.round((ax + nx * startW) * CLIPPER_SCALE), Y: Math.round((ay + ny * startW) * CLIPPER_SCALE) },
-          { X: Math.round((ax - nx * startW) * CLIPPER_SCALE), Y: Math.round((ay - ny * startW) * CLIPPER_SCALE) },
-          { X: Math.round((bx - nx * endW) * CLIPPER_SCALE), Y: Math.round((by - ny * endW) * CLIPPER_SCALE) },
-          { X: Math.round((bx + nx * endW) * CLIPPER_SCALE), Y: Math.round((by + ny * endW) * CLIPPER_SCALE) },
-        ]);
-      }
-      allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
     } else {
-      // Classic round ring
-      allOuterPaths.push(makeCirclePath(t.x, t.y, outerRadius, 48));
-      allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
+      // Round ring or teardrop ring
+      allOuterPaths.push(makeCirclePath(t.x, t.y, outerRadius, 52));
+      allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 44));
     }
 
-    // Automatic stem bridge(s) connecting hoop body into the surface (or BOTH left & right peaks when between two X points!)
+    // Smooth tapered capsule stem(s) anchored deep inside the inward-offset letter core
     if (hoopConfig.autoStemBridge !== false && targets.length > 0) {
+      const topNeckR =
+        style === 'teardrop'
+          ? outerRadius * (targets.length === 1 ? 0.86 : 0.62)
+          : Math.max(wallWidth * 0.9, outerRadius * 0.56);
+
       for (const st of targets) {
-        // Aim 1.6mm vertically downward inside the solid letter beneath the surface contact point (st.x, st.y)
-        const bx = st.x;
-        const by = st.y - 1.6;
-        const sAngle = Math.atan2(by - ay, bx - ax);
-        const stemHalfW = Math.max(wallWidth * 0.8, outerRadius * 0.48);
-        const nx = -Math.sin(sAngle) * stemHalfW;
-        const ny = Math.cos(sAngle) * stemHalfW;
-        allOuterPaths.push([
-          { X: Math.round((ax + nx) * CLIPPER_SCALE), Y: Math.round((ay + ny) * CLIPPER_SCALE) },
-          { X: Math.round((ax - nx) * CLIPPER_SCALE), Y: Math.round((ay - ny) * CLIPPER_SCALE) },
-          { X: Math.round((bx - nx) * CLIPPER_SCALE), Y: Math.round((by - ny) * CLIPPER_SCALE) },
-          { X: Math.round((bx + nx) * CLIPPER_SCALE), Y: Math.round((by + ny) * CLIPPER_SCALE) },
-        ]);
+        // Find nearest interior core point slightly below the surface contact point (st.x, st.y)
+        const corePt = findNearestContourPoint(innerCorePaths, st.x, st.y - 1.5);
+        const capsule = makeTaperedCapsulePaths(
+          ClipperLib,
+          ax,
+          ay,
+          topNeckR,
+          corePt.x,
+          corePt.y,
+          coreRadius
+        );
+        for (const p of capsule) allOuterPaths.push(p);
       }
     }
   }
 
-  const unionedOuter = unionClipperPaths(ClipperLib, allOuterPaths);
-  const finalHoopPaths = differenceClipperPaths(ClipperLib, unionedOuter, allInnerHoles);
+  const unionedHoopOuter = unionClipperPaths(ClipperLib, allOuterPaths);
+
+  // Naturally incorporate hoop into targetPaths with a 2D Concave Round Fillet (Morphological Closing)
+  // at the neck junction so the hoop blends organically into the letter contour!
+  const filletR = Math.min(1.6, wallWidth * 0.72);
+  const rawCombined = unionClipperPaths(ClipperLib, targetPaths, unionedHoopOuter);
+  const expanded = offsetClipperPaths(ClipperLib, rawCombined, filletR, false);
+  const closedFilleted = offsetClipperPaths(ClipperLib, expanded, -filletR, false);
+
+  // Intersect the fillet web with a local window around the hoop(s) so distant letter corners stay untouched
+  const hoopNeckWindows = rawTargets.map((t) =>
+    makeRoundedRectPath(t.x, t.y - outerRadius * 0.45, outerRadius * 3.8, outerRadius * 3.4, 2)
+  );
+  const unionedWindows = unionClipperPaths(ClipperLib, hoopNeckWindows);
+
+  // Extract only the added concave fillet webbing inside the neck windows
+  const cpr = new ClipperLib.Clipper();
+  cpr.AddPaths(closedFilleted, ClipperLib.PolyType.ptSubject, true);
+  cpr.AddPaths(unionedWindows, ClipperLib.PolyType.ptClip, true);
+  const localFilleted = new ClipperLib.Paths();
+  cpr.Execute(
+    ClipperLib.ClipType.ctIntersection,
+    localFilleted,
+    ClipperLib.PolyFillType.pftNonZero,
+    ClipperLib.PolyFillType.pftNonZero
+  );
+
+  // Union the smooth local fillet webbing with the hoop outer shape
+  const hoopWithFillet = unionClipperPaths(ClipperLib, unionedHoopOuter, localFilleted);
+
+  // Trim the bottom of the hoop where it meets targetPaths so its visible seam follows the
+  // EXACT curved contour of the letter (overlapping by 0.25mm inside for a watertight 3D print)
+  // rather than cutting across the letter with a flat horizontal line!
+  const slightlyInsetTarget = offsetClipperPaths(ClipperLib, targetPaths, -0.25, false);
+  const flushTrimmedHoopOuter =
+    slightlyInsetTarget.length > 0
+      ? differenceClipperPaths(ClipperLib, hoopWithFillet, slightlyInsetTarget)
+      : hoopWithFillet;
+
+  const finalHoopPaths = differenceClipperPaths(
+    ClipperLib,
+    flushTrimmedHoopOuter,
+    allInnerHoles
+  );
+
+  const filletedBodyPaths = differenceClipperPaths(
+    ClipperLib,
+    unionClipperPaths(ClipperLib, targetPaths, finalHoopPaths),
+    allInnerHoles
+  );
 
   return {
     hoopPaths: finalHoopPaths,
     holePaths: allInnerHoles,
+    filletedBodyPaths,
     anchors: rawTargets,
   };
 }
@@ -1419,7 +1481,17 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
   const hasPlaque = plaqueConfig.style && plaqueConfig.style !== 'none';
   let plaquePaths = hasPlaque ? buildPlaquePaths(ClipperLib, letterPaths, plaqueConfig) : [];
 
-  // 6. Raised Border / Outlined Halo Layer
+  // 6. Build Hanging Hoops directly against the main body (letters/plaque/accents) BEFORE the outline border
+  // so hoops anchor directly into the main letter body and the outline border wraps around both seamlessly!
+  const mainBodyForHoops = unionClipperPaths(
+    ClipperLib,
+    letterPaths,
+    plaquePaths,
+    accentResult.basePaths
+  );
+  const hoopResult = buildHangingHoops(ClipperLib, mainBodyForHoops, config.hoop);
+
+  // 7. Raised Border / Outlined Halo Layer (wraps around the unified letters + hoop silhouette)
   const borderConfig = config.border || { enabled: false };
   let borderPaths = [];
   if (borderConfig.enabled) {
@@ -1429,21 +1501,16 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
       const innerRim = offsetClipperPaths(ClipperLib, plaquePaths, -borderW, false);
       borderPaths = differenceClipperPaths(ClipperLib, plaquePaths, innerRim);
     } else {
-      // Outlined halo base/frame around the letters
-      const outerHalo = offsetClipperPaths(ClipperLib, letterPaths, borderW, false);
+      // Outlined halo base/frame wrapping smoothly around the letters AND the incorporated hoop(s)
+      const unifiedLetterAndHoop = unionClipperPaths(
+        ClipperLib,
+        letterPaths,
+        hoopResult.hoopPaths
+      );
+      const outerHalo = offsetClipperPaths(ClipperLib, unifiedLetterAndHoop, borderW, false);
       borderPaths = outerHalo;
     }
   }
-
-  // 7. Determine what polygon set the Hanging Hoops attach to
-  const combinedBodyForHoops = unionClipperPaths(
-    ClipperLib,
-    letterPaths,
-    plaquePaths,
-    borderPaths,
-    accentResult.basePaths
-  );
-  const hoopResult = buildHangingHoops(ClipperLib, combinedBodyForHoops, config.hoop);
 
   // If hoop has a hole, ensure the hole cuts through any overlapping plaque or border
   if (hoopResult.holePaths && hoopResult.holePaths.length > 0) {
@@ -1565,12 +1632,19 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
       });
     }
 
-    // Hanging Hoop (sits flat at Z=0 on print bed)
+    // Hanging Hoop (sits flat at Z=0 on print bed, with matching top bevel when matching letter thickness)
     if (hoopResult.hoopPaths.length > 0) {
       const hoopZ = config.hoop.matchThickness
         ? letterThicknessMm
         : Math.min(letterThicknessMm, config.hoop.thicknessMm || letterThicknessMm);
-      const hoopGeom = extrudeClipperPaths(ClipperLib, hoopResult.hoopPaths, hoopZ, 0, 0);
+      const hoopBevel = config.hoop.matchThickness ? bevelMm : 0;
+      const hoopGeom = extrudeClipperPaths(
+        ClipperLib,
+        hoopResult.hoopPaths,
+        hoopZ,
+        0,
+        hoopBevel
+      );
       if (hoopGeom) {
         layers.push({
           name: 'Hanging Hoop',

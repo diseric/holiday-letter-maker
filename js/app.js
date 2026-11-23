@@ -745,13 +745,13 @@ function renderHoopGizmos(unitsToRender, maxZ) {
       const isSelected =
         state.config.hoop.mode === 'custom' && idx === state.activeCustomHoopIndex;
 
-      // Glowing interactive ring gizmo + generous hit disc so grabbing any hoop in 3D is effortless
-      const ringGeom = new THREE.RingGeometry(innerR * 0.65, outerR * 1.18, 32);
+      // Subtle interactive ring gizmo (only visible when Pick Hoop Mode is active so it doesn't clutter the 3D view)
+      const ringGeom = new THREE.RingGeometry(innerR * 0.85, outerR * 1.05, 32);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: isSelected || state.pickHoopActive ? 0xffd25a : 0xe5b85c,
+        color: 0xffd25a,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: isSelected || state.pickHoopActive ? 0.7 : 0.32,
+        opacity: state.pickHoopActive ? (isSelected ? 0.55 : 0.25) : 0.0,
         depthTest: false,
       });
       const ringMesh = new THREE.Mesh(ringGeom, ringMat);

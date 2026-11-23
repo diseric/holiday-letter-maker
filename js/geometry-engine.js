@@ -475,6 +475,43 @@ export function findTopAnchorPoint(paths, targetX, searchRadiusMm = 10) {
 }
 
 /**
+ * Find the closest point on any polygon contour to an arbitrary (targetX, targetY) in any direction (360°).
+ */
+export function findNearestContourPoint(paths, targetX, targetY) {
+  let minDistSq = Infinity;
+  let nearest = { x: targetX, y: targetY };
+
+  for (const path of paths) {
+    const len = path.length;
+    for (let i = 0; i < len; i++) {
+      const p1 = path[i];
+      const p2 = path[(i + 1) % len];
+      const x1 = p1.X / CLIPPER_SCALE;
+      const y1 = p1.Y / CLIPPER_SCALE;
+      const x2 = p2.X / CLIPPER_SCALE;
+      const y2 = p2.Y / CLIPPER_SCALE;
+
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const segLenSq = dx * dx + dy * dy;
+      let t = 0;
+      if (segLenSq > 1e-6) {
+        t = ((targetX - x1) * dx + (targetY - y1) * dy) / segLenSq;
+        t = Math.max(0, Math.min(1, t));
+      }
+      const projX = x1 + t * dx;
+      const projY = y1 + t * dy;
+      const dSq = (targetX - projX) * (targetX - projX) + (targetY - projY) * (targetY - projY);
+      if (dSq < minDistSq) {
+        minDistSq = dSq;
+        nearest = { x: projX, y: projY };
+      }
+    }
+  }
+  return nearest;
+}
+
+/**
  * Build Hanging Hoop 2D Clipper Polygon (Outer minus Inner hole + Smart Stem Bridge into the letter/plaque)
  */
 export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
@@ -494,12 +531,30 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
 
   // Determine anchor points based on mode
   const rawTargets = [];
-  if (hoopConfig.mode === 'top-center') {
+  if (hoopConfig.mode === 'custom') {
+    const customPts =
+      Array.isArray(hoopConfig.customPoints) && hoopConfig.customPoints.length > 0
+        ? hoopConfig.customPoints
+        : [{ x: bounds.centerX, y: bounds.maxY + outerRadius * 0.55 }];
+    for (let i = 0; i < customPts.length; i++) {
+      const cp = customPts[i];
+      const cx = cp.x + (i === 0 ? manualX : 0);
+      const cy = cp.y + (i === 0 ? manualY : 0);
+      const nearest = findNearestContourPoint(targetPaths, cx, cy);
+      rawTargets.push({
+        x: cx,
+        y: cy,
+        stemTarget: nearest,
+        index: i,
+      });
+    }
+  } else if (hoopConfig.mode === 'top-center') {
     const anchor = findTopAnchorPoint(targetPaths, bounds.centerX + manualX, Math.max(8, bounds.width * 0.18));
     rawTargets.push({
       x: bounds.centerX + manualX,
       y: bounds.maxY + outerRadius * 0.55 + manualY,
       stemTarget: anchor,
+      index: 0,
     });
   } else if (hoopConfig.mode === 'smart-peak') {
     const anchor = findTopAnchorPoint(targetPaths, bounds.centerX + manualX, Math.max(18, bounds.width * 0.42));
@@ -507,6 +562,7 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       x: anchor.x + manualX,
       y: anchor.y + outerRadius * 0.6 + manualY,
       stemTarget: anchor,
+      index: 0,
     });
   } else if (hoopConfig.mode === 'dual-balance') {
     const spread = Math.max(0.15, Math.min(0.48, (hoopConfig.spreadPercent || 65) / 200));
@@ -518,11 +574,13 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       x: leftAnchor.x,
       y: leftAnchor.y + outerRadius * 0.6 + manualY,
       stemTarget: leftAnchor,
+      index: 0,
     });
     rawTargets.push({
       x: rightAnchor.x,
       y: rightAnchor.y + outerRadius * 0.6 + manualY,
       stemTarget: rightAnchor,
+      index: 1,
     });
   } else if (hoopConfig.mode === 'top-left') {
     const targetX = bounds.minX + bounds.width * 0.18 + manualX;
@@ -531,6 +589,7 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       x: anchor.x,
       y: anchor.y + outerRadius * 0.6 + manualY,
       stemTarget: anchor,
+      index: 0,
     });
   } else if (hoopConfig.mode === 'top-right') {
     const targetX = bounds.maxX - bounds.width * 0.18 + manualX;
@@ -539,6 +598,7 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       x: anchor.x,
       y: anchor.y + outerRadius * 0.6 + manualY,
       stemTarget: anchor,
+      index: 0,
     });
   }
 
@@ -546,6 +606,12 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
   const allInnerHoles = [];
 
   for (const t of rawTargets) {
+    const ax = t.x;
+    const ay = t.y;
+    const tx = t.stemTarget ? t.stemTarget.x : ax;
+    const ty = t.stemTarget ? t.stemTarget.y : ay - outerRadius;
+    const dirAngle = Math.atan2(ty - ay, tx - ax);
+
     if (style === 'slot') {
       // Wide ribbon slot (stadium oval)
       const slotWidth = innerRadius * 3.2;
@@ -555,15 +621,22 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       allOuterPaths.push(makeRoundedRectPath(t.x, t.y, outerW, outerH, outerH / 2));
       allInnerHoles.push(makeRoundedRectPath(t.x, t.y, slotWidth, slotHeight, slotHeight / 2));
     } else if (style === 'teardrop') {
-      // Reinforced teardrop lug with wider base skirt
+      // Reinforced teardrop lug oriented toward the nearest contour point (t.stemTarget)
       const circle = makeCirclePath(t.x, t.y, outerRadius, 48);
       allOuterPaths.push(circle);
-      const skirtBottomY = Math.min(t.y - outerRadius * 0.9, t.stemTarget.y - 1.5);
+      const distToTarget = Math.hypot(tx - ax, ty - ay);
+      const reach = Math.max(outerRadius * 0.9, distToTarget + 1.6);
+      const bx = ax + Math.cos(dirAngle) * reach;
+      const by = ay + Math.sin(dirAngle) * reach;
+      const nx = -Math.sin(dirAngle);
+      const ny = Math.cos(dirAngle);
+      const startW = outerRadius * 0.92;
+      const endW = outerRadius * 1.15;
       const skirt = [
-        { X: Math.round((t.x - outerRadius * 0.92) * CLIPPER_SCALE), Y: Math.round(t.y * CLIPPER_SCALE) },
-        { X: Math.round((t.stemTarget.x - outerRadius * 1.15) * CLIPPER_SCALE), Y: Math.round(skirtBottomY * CLIPPER_SCALE) },
-        { X: Math.round((t.stemTarget.x + outerRadius * 1.15) * CLIPPER_SCALE), Y: Math.round(skirtBottomY * CLIPPER_SCALE) },
-        { X: Math.round((t.x + outerRadius * 0.92) * CLIPPER_SCALE), Y: Math.round(t.y * CLIPPER_SCALE) },
+        { X: Math.round((ax + nx * startW) * CLIPPER_SCALE), Y: Math.round((ay + ny * startW) * CLIPPER_SCALE) },
+        { X: Math.round((ax - nx * startW) * CLIPPER_SCALE), Y: Math.round((ay - ny * startW) * CLIPPER_SCALE) },
+        { X: Math.round((bx - nx * endW) * CLIPPER_SCALE), Y: Math.round((by - ny * endW) * CLIPPER_SCALE) },
+        { X: Math.round((bx + nx * endW) * CLIPPER_SCALE), Y: Math.round((by + ny * endW) * CLIPPER_SCALE) },
       ];
       allOuterPaths.push(skirt);
       allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
@@ -573,16 +646,15 @@ export function buildHangingHoops(ClipperLib, targetPaths, hoopConfig) {
       allInnerHoles.push(makeCirclePath(t.x, t.y, innerRadius, 40));
     }
 
-    // Automatic stem bridge connecting hoop body down into the letter/plaque anchor point
+    // Automatic stem bridge connecting hoop body into the letter/plaque anchor point in any direction
     if (hoopConfig.autoStemBridge !== false && t.stemTarget) {
-      const ax = t.x;
-      const ay = t.y;
-      const bx = t.stemTarget.x;
-      const by = t.stemTarget.y - 1.6; // penetrate 1.6mm into solid letter geometry
-      const angle = Math.atan2(by - ay, bx - ax);
+      const distToTarget = Math.hypot(tx - ax, ty - ay);
+      const reach = distToTarget + 1.8; // penetrate 1.8mm into solid letter geometry
+      const bx = ax + Math.cos(dirAngle) * reach;
+      const by = ay + Math.sin(dirAngle) * reach;
       const stemHalfW = Math.max(wallWidth * 0.85, outerRadius * 0.55);
-      const nx = -Math.sin(angle) * stemHalfW;
-      const ny = Math.cos(angle) * stemHalfW;
+      const nx = -Math.sin(dirAngle) * stemHalfW;
+      const ny = Math.cos(dirAngle) * stemHalfW;
       allOuterPaths.push([
         { X: Math.round((ax + nx) * CLIPPER_SCALE), Y: Math.round((ay + ny) * CLIPPER_SCALE) },
         { X: Math.round((ax - nx) * CLIPPER_SCALE), Y: Math.round((ay - ny) * CLIPPER_SCALE) },

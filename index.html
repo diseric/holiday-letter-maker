@@ -226,6 +226,7 @@
             <div class="field-group">
               <label class="field-label" for="hoopModeSelect">Hoop Arrangement</label>
               <select id="hoopModeSelect">
+                <option value="custom">🎯 Custom Picked (Click or Drag on 3D Model)</option>
                 <option value="smart-peak">Smart Highest Peak (Snaps to Tallest Stroke)</option>
                 <option value="top-center">Top Center (Single Balanced Hoop)</option>
                 <option value="dual-balance">Dual Corner Balance Hoops (Left + Right)</option>
@@ -233,6 +234,21 @@
                 <option value="top-right">Top-Right Corner Hoop (Angled Hang)</option>
                 <option value="none">No Hoop (Free-Standing Shelf Sign)</option>
               </select>
+            </div>
+
+            <div class="hoop-picker-box">
+              <div class="hoop-picker-actions">
+                <button class="btn btn-gold" id="sidebarPickHoopBtn" style="flex: 1; justify-content: center;">
+                  🎯 Click on 3D Model to Place Hoop
+                </button>
+                <button class="btn btn-secondary" id="addExtraHoopBtn" title="Add another hanging hoop to the ornament">
+                  + Add Hoop
+                </button>
+              </div>
+              <p class="card-hint">
+                Tip: You can also <strong>drag any gold hoop handle</strong> directly on the 3D canvas, or click <strong>Pick Hoop Spot</strong> to click anywhere around the letter! (Hold <strong>Shift + Click</strong> to add multiple hoops.)
+              </p>
+              <div class="custom-hoops-list" id="customHoopsList"></div>
             </div>
 
             <div class="field-group">
@@ -546,11 +562,20 @@
         </div>
 
         <div class="viewport-controls-pill">
+          <button class="cam-btn pick-hoop-pill-btn" id="viewportPickHoopBtn" title="Click anywhere on the 3D ornament to place or move the hanging hoop">
+            🎯 Pick Hoop Spot
+          </button>
           <button class="cam-btn" id="camTopBtn" title="Snap camera directly above build plate">Top View</button>
           <button class="cam-btn" id="camIsoBtn" title="Reset 3D perspective camera">3D Angle</button>
           <button class="cam-btn" id="toggleWireframeBtn" title="Inspect STL triangle mesh">Wireframe</button>
           <button class="cam-btn active" id="toggleGridBtn" title="Toggle 220x220mm 3D Printer Build Plate">220mm Bed</button>
         </div>
+      </div>
+
+      <!-- Interactive Hoop Placement Mode Banner -->
+      <div class="hoop-placement-banner" id="hoopPlacementBanner">
+        <span>🎯 <strong>Click anywhere around the letter</strong> to place hoop • <strong>Shift + Click</strong> to add another hoop • <strong>Drag</strong> any hoop ring to move it</span>
+        <button class="quick-fix-btn" id="exitPickHoopBtn">Done</button>
       </div>
 
       <!-- Individual Monogram Unit Chip Selector (visible in Individual Monogram Mode) -->

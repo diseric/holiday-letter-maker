@@ -160,4 +160,28 @@ for (const style of ['contour', 'bauble', 'tag', 'tree', 'snowflake-plaque']) {
   }
 }
 
+// Test 5: Verify custom picked hoop coordinates in any direction
+const projCustomHoop = buildHolidayLetteringProject(ClipperLib, font, {
+  text: 'Noel',
+  layoutMode: 'connected',
+  letterHeightMm: 55,
+  letterThicknessMm: 3.5,
+  hoop: {
+    mode: 'custom',
+    style: 'teardrop',
+    innerDiameterMm: 4.2,
+    wallThicknessMm: 2.2,
+    customPoints: [
+      { x: -38.5, y: 31.0 },
+      { x: 41.2, y: 27.5 },
+    ],
+    autoStemBridge: true,
+    matchThickness: true,
+  },
+});
+console.log('Custom picked hoops anchors:', projCustomHoop.units[0].hoopAnchors);
+if (projCustomHoop.units[0].hoopAnchors.length !== 2) {
+  throw new Error('Expected 2 custom picked hoop anchors');
+}
+
 console.log('ALL GEOMETRY & STL EXPORT TESTS PASSED!');

@@ -339,11 +339,18 @@ const state = {
   showGrid: true,
   selectedUnitIndex: -1, // -1 = All Plate, 0..N = specific individual monogram letter
   lastProject: null,
+  pickHoopActive: false,
+  activeCustomHoopIndex: 0,
+  draggingHoopIndex: -1,
+  draggingUnitOffset: { dx: 0, dy: 0 },
 };
 
 // Three.js Scene Objects
 let scene, camera, renderer, controls;
-let ornamentGroup, buildPlateGroup, dimensionHelperGroup;
+let ornamentGroup, buildPlateGroup, dimensionHelperGroup, hoopGizmoGroup, hoopPreviewGhost;
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const buildPlatePlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
 /**
  * Initialize Three.js 3D Viewport
@@ -420,6 +427,14 @@ function initViewport() {
   dimensionHelperGroup = new THREE.Group();
   scene.add(dimensionHelperGroup);
 
+  hoopGizmoGroup = new THREE.Group();
+  scene.add(hoopGizmoGroup);
+
+  hoopPreviewGhost = new THREE.Group();
+  hoopPreviewGhost.visible = false;
+  scene.add(hoopPreviewGhost);
+
+  setupHoopPointerInteractions(canvas);
   window.addEventListener('resize', onWindowResize);
   animate();
 }
@@ -607,6 +622,341 @@ function rebuildSceneGeometry() {
 
   // Printability Diagnostics Banner
   updatePrintabilityDiagnostics(project, unitsToRender);
+
+  // Render interactive 3D Hoop Drag Handles & sync custom hoop list
+  renderHoopGizmos(unitsToRender, depthMm);
+  renderCustomHoopsList();
+}
+
+/**
+ * Ensure state.config.hoop.customPoints is populated from current hoop anchors
+ */
+function ensureCustomHoopPointsInitialized() {
+  const hoopCfg = state.config.hoop;
+  if (
+    hoopCfg.mode === 'custom' &&
+    Array.isArray(hoopCfg.customPoints) &&
+    hoopCfg.customPoints.length > 0
+  ) {
+    return;
+  }
+  const unit =
+    state.lastProject &&
+    state.lastProject.units[
+      state.selectedUnitIndex >= 0 ? state.selectedUnitIndex : 0
+    ];
+  if (unit && unit.hoopAnchors && unit.hoopAnchors.length > 0) {
+    hoopCfg.customPoints = unit.hoopAnchors.map((a) => ({
+      x: Number(a.x.toFixed(1)),
+      y: Number(a.y.toFixed(1)),
+    }));
+  } else {
+    const h = (state.config.letterHeightMm || 60) * 0.55;
+    hoopCfg.customPoints = [{ x: 0, y: Number(h.toFixed(1)) }];
+  }
+  hoopCfg.mode = 'custom';
+  hoopCfg.offsetXMm = 0;
+  hoopCfg.offsetYMm = 0;
+  state.activeCustomHoopIndex = 0;
+}
+
+/**
+ * Draw interactive draggable 3D handles over each hoop in the viewport
+ */
+function renderHoopGizmos(unitsToRender, maxZ) {
+  while (hoopGizmoGroup.children.length > 0) {
+    const c = hoopGizmoGroup.children[0];
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) c.material.dispose();
+    hoopGizmoGroup.remove(c);
+  }
+
+  if (state.config.hoop.mode === 'none') return;
+
+  const innerR = Math.max(0.8, (state.config.hoop.innerDiameterMm || 4.0) / 2);
+  const outerR = innerR + (state.config.hoop.wallThicknessMm || 2.2);
+  const handleZ = Math.max(2.0, maxZ + 0.35);
+
+  unitsToRender.forEach((unit) => {
+    const dx =
+      state.selectedUnitIndex >= 0 ? 0 : unit.plateOffset ? unit.plateOffset.dx : 0;
+    const dy =
+      state.selectedUnitIndex >= 0 ? 0 : unit.plateOffset ? unit.plateOffset.dy : 0;
+
+    (unit.hoopAnchors || []).forEach((anchor, idx) => {
+      const isSelected =
+        state.config.hoop.mode === 'custom' && idx === state.activeCustomHoopIndex;
+
+      // Glowing interactive ring gizmo
+      const ringGeom = new THREE.RingGeometry(innerR * 0.75, outerR * 1.08, 32);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: isSelected || state.pickHoopActive ? 0xffd25a : 0xe5b85c,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: isSelected || state.pickHoopActive ? 0.55 : 0.22,
+        depthTest: false,
+      });
+      const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+      ringMesh.position.set(anchor.x + dx, anchor.y + dy, handleZ);
+      ringMesh.userData = {
+        isHoopHandle: true,
+        hoopIndex: idx,
+        unitOffset: { dx, dy },
+      };
+      hoopGizmoGroup.add(ringMesh);
+    });
+  });
+}
+
+/**
+ * Update Ghost Preview Hoop while hovering in "Pick Hoop Spot" mode
+ */
+function updateGhostPreviewHoop(worldX, worldY) {
+  while (hoopPreviewGhost.children.length > 0) {
+    const c = hoopPreviewGhost.children[0];
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) c.material.dispose();
+    hoopPreviewGhost.remove(c);
+  }
+
+  const innerR = Math.max(0.8, (state.config.hoop.innerDiameterMm || 4.0) / 2);
+  const outerR = innerR + (state.config.hoop.wallThicknessMm || 2.2);
+  const ringGeom = new THREE.RingGeometry(innerR, outerR, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffd25a,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.75,
+    depthTest: false,
+  });
+  const mesh = new THREE.Mesh(ringGeom, ringMat);
+  mesh.position.set(worldX, worldY, (state.config.letterThicknessMm || 4) + 0.5);
+  hoopPreviewGhost.add(mesh);
+  hoopPreviewGhost.visible = true;
+}
+
+/**
+ * Raycast pointer event to the Z=0 build plate plane (returns { x, y } in mm)
+ */
+function getPointerBuildPlateMm(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hitPt = new THREE.Vector3();
+  const hit = raycaster.ray.intersectPlane(buildPlatePlane, hitPt);
+  return hit ? { x: hitPt.x, y: hitPt.y } : null;
+}
+
+/**
+ * Setup interactive click-to-place & direct drag-and-drop for hanging hoops on the 3D canvas
+ */
+function setupHoopPointerInteractions(canvas) {
+  let downPos = null;
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    downPos = { x: e.clientX, y: e.clientY };
+
+    const rect = canvas.getBoundingClientRect();
+    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+
+    // Check if user grabbed an existing hoop gizmo handle
+    const hits = raycaster.intersectObjects(hoopGizmoGroup.children, false);
+    if (hits.length > 0) {
+      const handle = hits[0].object;
+      ensureCustomHoopPointsInitialized();
+      state.draggingHoopIndex = handle.userData.hoopIndex ?? 0;
+      state.activeCustomHoopIndex = state.draggingHoopIndex;
+      state.draggingUnitOffset = handle.userData.unitOffset || { dx: 0, dy: 0 };
+      controls.enabled = false;
+      canvas.style.cursor = 'grabbing';
+      syncUIFromConfig();
+      e.stopPropagation();
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    const pt = getPointerBuildPlateMm(e, canvas);
+
+    // 1. Live dragging a hoop handle across the 3D model
+    if (state.draggingHoopIndex >= 0 && pt) {
+      const localX = Number((pt.x - state.draggingUnitOffset.dx).toFixed(1));
+      const localY = Number((pt.y - state.draggingUnitOffset.dy).toFixed(1));
+      if (state.config.hoop.customPoints[state.draggingHoopIndex]) {
+        state.config.hoop.customPoints[state.draggingHoopIndex] = {
+          x: localX,
+          y: localY,
+        };
+        rebuildSceneGeometry();
+      }
+      return;
+    }
+
+    // 2. Live ghost preview ring when "Pick Hoop Spot" mode is active
+    if (state.pickHoopActive && pt) {
+      updateGhostPreviewHoop(pt.x, pt.y);
+      canvas.style.cursor = 'crosshair';
+      return;
+    }
+
+    // 3. Hover cursor feedback over hoop handles
+    const rect = canvas.getBoundingClientRect();
+    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+    const hits = raycaster.intersectObjects(hoopGizmoGroup.children, false);
+    canvas.style.cursor = hits.length > 0 ? 'grab' : 'default';
+  });
+
+  window.addEventListener('pointerup', (e) => {
+    if (state.draggingHoopIndex >= 0) {
+      state.draggingHoopIndex = -1;
+      controls.enabled = true;
+      canvas.style.cursor = state.pickHoopActive ? 'crosshair' : 'default';
+      syncUIFromConfig();
+      rebuildSceneGeometry();
+      return;
+    }
+
+    // If in "Pick Hoop Spot" mode and user clicked (not dragged camera) on the 3D viewport
+    if (
+      state.pickHoopActive &&
+      downPos &&
+      e.target === canvas &&
+      Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 6
+    ) {
+      const pt = getPointerBuildPlateMm(e, canvas);
+      if (pt) {
+        ensureCustomHoopPointsInitialized();
+        // Convert world plate coordinate to active unit's local coordinate
+        let dx = 0,
+          dy = 0;
+        if (
+          state.lastProject &&
+          state.lastProject.mode === 'individual' &&
+          state.selectedUnitIndex === -1 &&
+          state.lastProject.units.length > 0
+        ) {
+          // Find closest monogram unit to the click point
+          let bestDist = Infinity;
+          for (const u of state.lastProject.units) {
+            const udx = u.plateOffset?.dx || 0;
+            const udy = u.plateOffset?.dy || 0;
+            const d = Math.hypot(pt.x - udx, pt.y - udy);
+            if (d < bestDist) {
+              bestDist = d;
+              dx = udx;
+              dy = udy;
+            }
+          }
+        }
+
+        const localX = Number((pt.x - dx).toFixed(1));
+        const localY = Number((pt.y - dy).toFixed(1));
+
+        if (e.shiftKey) {
+          // Shift + Click adds a new hoop
+          state.config.hoop.customPoints.push({ x: localX, y: localY });
+          state.activeCustomHoopIndex = state.config.hoop.customPoints.length - 1;
+          showToast(`Added Hoop #${state.activeCustomHoopIndex + 1} at (${localX}, ${localY} mm)`);
+        } else {
+          // Normal Click moves the currently active hoop
+          const idx = Math.min(
+            state.activeCustomHoopIndex,
+            state.config.hoop.customPoints.length - 1
+          );
+          state.config.hoop.customPoints[idx] = { x: localX, y: localY };
+          showToast(`Placed Hoop #${idx + 1} at (${localX}, ${localY} mm)`);
+        }
+
+        syncUIFromConfig();
+        rebuildSceneGeometry();
+      }
+    }
+    downPos = null;
+  });
+}
+
+/**
+ * Toggle interactive "Pick Hoop Spot" mode on/off
+ */
+function setPickHoopMode(active) {
+  state.pickHoopActive = active;
+  if (active) {
+    ensureCustomHoopPointsInitialized();
+    syncUIFromConfig();
+    rebuildSceneGeometry();
+  } else {
+    hoopPreviewGhost.visible = false;
+  }
+
+  const vpBtn = document.getElementById('viewportPickHoopBtn');
+  const sbBtn = document.getElementById('sidebarPickHoopBtn');
+  const banner = document.getElementById('hoopPlacementBanner');
+  if (vpBtn) vpBtn.classList.toggle('active', active);
+  if (sbBtn) {
+    sbBtn.textContent = active
+      ? '✓ Picking Active (Click on 3D Letter)'
+      : '🎯 Click on 3D Model to Place Hoop';
+  }
+  if (banner) banner.classList.toggle('visible', active);
+}
+
+/**
+ * Render the list of custom hoops in the Hoops sidebar tab
+ */
+function renderCustomHoopsList() {
+  const listEl = document.getElementById('customHoopsList');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const hoopCfg = state.config.hoop;
+  const pts =
+    hoopCfg.mode === 'custom' && Array.isArray(hoopCfg.customPoints)
+      ? hoopCfg.customPoints
+      : state.lastProject?.units?.[0]?.hoopAnchors || [];
+
+  pts.forEach((pt, idx) => {
+    const row = document.createElement('div');
+    const isSelected =
+      hoopCfg.mode === 'custom' && idx === state.activeCustomHoopIndex;
+    row.className = `custom-hoop-row ${isSelected ? 'active-target' : ''}`;
+
+    const label = document.createElement('span');
+    label.className = 'custom-hoop-coords';
+    label.textContent = `Hoop #${idx + 1}: X ${Number(pt.x).toFixed(1)} mm, Y ${Number(pt.y).toFixed(1)} mm`;
+    label.title = 'Click to select this hoop for placement';
+    label.addEventListener('click', () => {
+      ensureCustomHoopPointsInitialized();
+      state.activeCustomHoopIndex = idx;
+      setPickHoopMode(true);
+      rebuildSceneGeometry();
+    });
+    row.appendChild(label);
+
+    if (pts.length > 1) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'custom-hoop-del';
+      delBtn.textContent = '✕';
+      delBtn.title = 'Remove this hoop';
+      delBtn.addEventListener('click', () => {
+        ensureCustomHoopPointsInitialized();
+        state.config.hoop.customPoints.splice(idx, 1);
+        state.activeCustomHoopIndex = Math.max(
+          0,
+          state.config.hoop.customPoints.length - 1
+        );
+        syncUIFromConfig();
+        rebuildSceneGeometry();
+      });
+      row.appendChild(delBtn);
+    }
+
+    listEl.appendChild(row);
+  });
 }
 
 /**
@@ -1033,9 +1383,51 @@ function bindUIEvents() {
 
   // Hoop Controls
   document.getElementById('hoopModeSelect').addEventListener('change', (e) => {
-    state.config.hoop.mode = e.target.value;
+    if (e.target.value === 'custom') {
+      ensureCustomHoopPointsInitialized();
+    } else {
+      state.config.hoop.mode = e.target.value;
+      setPickHoopMode(false);
+    }
     syncUIFromConfig();
     rebuildSceneGeometry();
+  });
+
+  // Interactive Hoop Picker Buttons (Viewport + Sidebar + Add Hoop + Done)
+  document.getElementById('viewportPickHoopBtn').addEventListener('click', () => {
+    setPickHoopMode(!state.pickHoopActive);
+  });
+
+  document.getElementById('sidebarPickHoopBtn').addEventListener('click', () => {
+    setPickHoopMode(!state.pickHoopActive);
+  });
+
+  document.getElementById('exitPickHoopBtn').addEventListener('click', () => {
+    setPickHoopMode(false);
+  });
+
+  document.getElementById('addExtraHoopBtn').addEventListener('click', () => {
+    ensureCustomHoopPointsInitialized();
+    const last =
+      state.config.hoop.customPoints[state.config.hoop.customPoints.length - 1] || {
+        x: 0,
+        y: 30,
+      };
+    state.config.hoop.customPoints.push({
+      x: Number((last.x + 18).toFixed(1)),
+      y: Number(last.y.toFixed(1)),
+    });
+    state.activeCustomHoopIndex = state.config.hoop.customPoints.length - 1;
+    setPickHoopMode(true);
+    syncUIFromConfig();
+    rebuildSceneGeometry();
+    showToast(`Added Hoop #${state.activeCustomHoopIndex + 1} — click anywhere on the 3D letter to place it!`);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.pickHoopActive) {
+      setPickHoopMode(false);
+    }
   });
 
   document.querySelectorAll('#hoopStyleGroup .seg-btn').forEach((btn) => {

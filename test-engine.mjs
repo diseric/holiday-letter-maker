@@ -219,4 +219,26 @@ for (let x = -80; x <= 80; x += 10) {
   }
 }
 
+// Test 7: Reference White Block Letter 'E' with 2D corner rounding, 3D torus eyelet, and Mid-Z centering
+const refBlockProj = buildHolidayLetteringProject(ClipperLib, bungeeFont, {
+  text: 'E',
+  layoutMode: 'connected',
+  letterHeightMm: 78,
+  letterThicknessMm: 12.0,
+  bevelMm: 0.5,
+  cornerRadiusMm: 1.2,
+  hoop: {
+    mode: 'top-center',
+    style: 'eyelet',
+    zPlacement: 'center',
+    innerDiameterMm: 4.5,
+    wallThicknessMm: 1.5,
+  },
+});
+const refStats = computeMeshStats(refBlockProj.units[0].mergedGeometry);
+console.log('Reference Block E Stats:', refStats);
+if (!refBlockProj.units[0].mergedGeometry || refStats.triangles < 500) {
+  throw new Error('Reference Block E 3D eyelet merge failed!');
+}
+
 console.log('ALL GEOMETRY & STL EXPORT TESTS PASSED!');

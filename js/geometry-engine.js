@@ -1493,7 +1493,8 @@ export function build3DTorusEyeletGeometry(anchors, hoopConfig, zCenterMm) {
   }
 
   if (geoms.length === 0) return null;
-  const merged = BufferGeometryUtils.mergeGeometries(geoms, false);
+  const nonIndexedGeoms = geoms.map((g) => (g.index ? g.toNonIndexed() : g));
+  const merged = BufferGeometryUtils.mergeGeometries(nonIndexedGeoms, false);
   merged.computeVertexNormals();
   return merged;
 }
@@ -1845,11 +1846,13 @@ export function buildSingleOrnamentUnit(ClipperLib, font, text, config) {
   }
 
   // Merge all geometries for single-mesh STL export & bounding box measurement
-  const geomsToMerge = layers.map((l) => l.geometry.clone());
+  const geomsToMerge = layers.map((l) =>
+    l.geometry.index ? l.geometry.toNonIndexed() : l.geometry.clone()
+  );
   let mergedGeometry = null;
   if (geomsToMerge.length > 0) {
     mergedGeometry = BufferGeometryUtils.mergeGeometries(geomsToMerge, false);
-    mergedGeometry.computeBoundingBox();
+    if (mergedGeometry) mergedGeometry.computeBoundingBox();
   }
 
   const finalBounds = getClipperBoundsMm(completeFootprint);
